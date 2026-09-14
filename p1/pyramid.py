@@ -41,7 +41,7 @@ def image_pyramid(image: np.array, depth: int) -> list:
 
 def auto_pyramid(image: np.array, target_max_dim: int=500)->list:
     """Returns a pyramid with coarsest image less target_max_dim"""
-    depth = np.ceil(np.log2(max(image.shape)/target_max_dim))
+    depth = int(np.ceil(np.log2(max(image.shape)/target_max_dim)))
     return image_pyramid(image, depth)
         
 

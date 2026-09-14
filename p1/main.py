@@ -9,7 +9,7 @@ import skimage.io as skio
 import align as align
 
 # name of the input file
-imname = 'cathedral.jpg'
+imname = 'melons.tif'
 
 # read in the image
 path = "data/"+imname
@@ -31,8 +31,8 @@ r = im[2*height: 3*height]
 # g_offset = align.calculate_offset_ncc(b, g)
 # r_offset = align.calculate_offset_ncc(b, r)
 
-g_offset = align.vectorized_calculate_offset_ncc(b, g)
-r_offset = align.vectorized_calculate_offset_ncc(b, r)
+g_offset = align.calculate_offset_pyramid(b, g, step_max_offset=4)
+r_offset = align.calculate_offset_pyramid(b, r, step_max_offset=4)
 
 rgb_aligned = align.align_and_crop(b, g, g_offset, r, r_offset)
 
