@@ -4,7 +4,7 @@ from numpy.lib.stride_tricks import sliding_window_view as sliding_window
 def mirror_pad_2(image: np.array):
     rows, cols = image.shape
 
-    padded = np.zeros((rows+4, cols+4))
+    padded = np.zeros((rows+4, cols+4),  dtype=image.dtype)
     padded[2:-2,2:-2] = image
 
     padded[0:2,2:-2] = image[2:0:-1, :] # top pad
@@ -39,10 +39,10 @@ def image_pyramid(image: np.array, depth: int) -> list:
         pyramid.insert(0,downsample_half(pyramid[0]))
     return pyramid
 
-def auto_pyramid(image: np.array, target_max_dim: int=500)->list:
+def auto_pyramid(image: np.array, target_max_dim: int=800)->list:
     """Returns a pyramid with coarsest image less target_max_dim"""
     depth = int(np.ceil(np.log2(max(image.shape)/target_max_dim)))
-    return image_pyramid(image, depth)
+    return image_pyramid(image, max(depth, 0) + 1)
         
 
 

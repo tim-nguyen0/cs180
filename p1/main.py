@@ -1,44 +1,15 @@
-#  CS180 (CS280A): Project 1 starter Python code
-
-# these are just some suggested libraries
-# instead of scikit-image you could use matplotlib and opencv to read, write, and display images
-
-import numpy as np
-import skimage as sk
-import skimage.io as skio
+from pathlib import Path
 import align as align
+from datetime import datetime
 
-# name of the input file
-imname = 'siren.tif'
 
-# read in the image
-path = "data/"+imname
-im = skio.imread(path)
 
-# convert to double (might want to do this later on to save memory)    
-im = sk.img_as_float(im)
+images_path = "data"
+extensions = {".jpg", ".tif"}
 
-    
-# compute the height of each part (just 1/3 of total)
-height = np.floor(im.shape[0] / 3.0).astype(int)
+paths = sorted(str(p) for p in Path(images_path).iterdir() if p.suffix.lower() in extensions)
 
-# separate color channels
-b = im[:height]
-g = im[height: 2*height]
-r = im[2*height: 3*height]
+out_path = "out/multiple_"+datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+Path(out_path).mkdir(parents=True, exist_ok=True)
 
-# align the images
-g_offset = align.calculate_offset_pyramid(b, g, step_max_offset=4, crop_frac=0.3)
-r_offset = align.calculate_offset_pyramid(b, r, step_max_offset=4, crop_frac=0.3)
-rgb_aligned = align.align_and_crop(b, g, g_offset, r, r_offset)
-
-# create a color image
-im_out = sk.util.img_as_ubyte(np.dstack(rgb_aligned))
-
-# save the image
-fname = 'out/out_'+imname
-skio.imsave(fname, im_out)
-
-# display the image
-skio.imshow(im_out)
-skio.show()
+align.align_and_save_multiple(paths, out_path, max_offset_initial=200, max_offset_step=10, crop_frac=0.4)

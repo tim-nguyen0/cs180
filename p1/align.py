@@ -1,14 +1,60 @@
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view as sliding_window
 import pyramid as pyramid
+import skimage as sk
+import skimage.io as skio
+import align as align
+from pathlib import Path
+import time
 
 
-def interior(img: np.array, frac: float = 0.1) -> np.array:
-    """helper function to crop with"""
-    h, w = img.shape
-    return img[int(h*frac):int(h*(1-frac)), int(w*frac):int(w*(1-frac))]
+def align_and_save(im_path: str, out_path: str, max_offset_initial: int=50, max_offset_step: int=5, crop_frac: float=0.3) -> np.array:
+    # read in the image
+    t0 = time.perf_counter()
+    imname = Path(im_path).name
 
-def calculate_offset_pyramid(ref: np.array, child: np.array, initial_max_offset: int=50, step_max_offset: int=5, crop_frac: float=0.1) -> tuple:
+    im = skio.imread(im_path)
+
+    # convert to double (might want to do this later on to save memory)    
+    im = sk.img_as_float(im)
+
+    # compute the height of each part (just 1/3 of total)
+    height = np.floor(im.shape[0] / 3.0).astype(int)
+
+    # separate color channels
+    b = im[:height]
+    g = im[height: 2*height]
+    r = im[2*height: 3*height]
+
+    # align the images
+    g_offset = align.calculate_offset_pyramid(b, g, step_max_offset=max_offset_step, initial_max_offset=max_offset_initial, crop_frac=crop_frac)
+    r_offset = align.calculate_offset_pyramid(b, r, step_max_offset=max_offset_step, initial_max_offset=max_offset_initial, crop_frac=crop_frac)
+    rgb_aligned = align.align_and_crop(b, g, g_offset, r, r_offset)
+
+    # create a color image
+    im_out = sk.util.img_as_ubyte(np.dstack(rgb_aligned))
+
+    # save the image
+    fname = out_path+'/out_'+imname
+    skio.imsave(fname, im_out)
+    print(f"{time.perf_counter() - t0:.2f}s elapsed")
+
+    return im_out
+
+
+def align_and_save_multiple(im_paths: list, out_path: str, max_offset_initial: int=50, max_offset_step: int=5, crop_frac: float=0.3) -> list:
+    """Returns list of aligned images ordered as the original"""
+    t0 = time.perf_counter()
+    out_list = []
+    for i in range(len(im_paths)):
+        out_list.append(align_and_save(im_paths[i], out_path, max_offset_initial=max_offset_initial, max_offset_step=max_offset_step, crop_frac=crop_frac))
+        print(im_paths[i] + ": aligned and composed image saved at " + out_path+'/out_'+ Path(im_paths[i]).name)
+    print(f"{time.perf_counter() - t0:.2f}s total time elapsed")
+    return out_list
+
+
+
+def calculate_offset_pyramid(ref: np.array, child: np.array, initial_max_offset: int=50, step_max_offset: int=5, crop_frac: float=0.3) -> tuple:
     """Calculates offset for a larger image using image pyramid. Smallest image will be normalized to ~500 px on largest axis"""
 
     ref = interior(ref.astype(np.float32, copy=False), crop_frac)
@@ -16,6 +62,10 @@ def calculate_offset_pyramid(ref: np.array, child: np.array, initial_max_offset:
 
     child_pyramid = pyramid.auto_pyramid(child)
     pdepth = len(child_pyramid)
+
+    if pdepth==1:
+        return vectorized_calculate_offset_ncc(ref, child, max_offset=int(max(ref.shape)/5))
+
     ref_pyramid= pyramid.image_pyramid(ref, pdepth)
 
     offset = vectorized_calculate_offset_ncc(ref_pyramid[0], child_pyramid[0], max_offset=initial_max_offset)
@@ -87,7 +137,7 @@ def vectorized_calculate_offset_ncc(ref_in: np.array, child: np.array, max_offse
 
     ref_windows = sliding_window(ref, template_size)
 
-    means = np.mean(ref_windows, axis=(-2,-1))/n
+    means = np.sum(ref_windows, axis=(-2,-1))/n
 
     sum_sq = np.einsum('ijhw,ijhw->ij', ref_windows, ref_windows)
     variances = sum_sq / n - means**2
@@ -120,3 +170,8 @@ def normalize_matrix(mat: np.array) -> np.array:
     if std == 0:
         return mat - mean
     return (mat - mean)/std
+
+def interior(img: np.array, frac: float = 0.1) -> np.array:
+    """helper function to crop with"""
+    h, w = img.shape
+    return img[int(h*frac):int(h*(1-frac)), int(w*frac):int(w*(1-frac))]
