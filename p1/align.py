@@ -1,0 +1,94 @@
+import numpy as np
+from numpy.lib.stride_tricks import sliding_window_view as sliding_window
+
+def calculate_offset_ncc(ref: np.array, child: np.array, max_offset: float=0.1) -> tuple:
+
+    if max_offset>=1:
+        raise ValueError("Cannot offset by larger than image")
+
+    max_offset=int(max_offset*min(ref.shape))
+
+    rows, cols = ref.shape
+    max_ncc = -np.inf
+    offset = (0, 0)
+
+    for i in range(-max_offset, max_offset):
+        for j in range(-max_offset, max_offset):
+            
+            ref_top = max(0, i)
+            ref_bottom = min(rows, rows + i)
+            ref_left = max(0, j)
+            ref_right = min(cols, cols + j)
+            
+            child_top = max(0, -i)
+            child_bottom = min(rows, rows - i)
+            child_left = max(0, -j)
+            child_right = min(cols, cols - j)
+
+            ref_patch = ref[ref_top:ref_bottom, ref_left:ref_right]
+            child_patch = child[child_top:child_bottom, child_left:child_right]
+
+            if ref_patch.shape[0] < (rows * 0.7) or ref_patch.shape[1] < (cols * 0.7):
+                continue
+
+            normalized_ref = normalize_matrix(ref_patch)
+            normalized_child = normalize_matrix(child_patch)
+            current_ncc = np.mean(normalized_ref * normalized_child)
+
+            if current_ncc>max_ncc:
+                max_ncc = current_ncc
+                offset = (i,j)
+
+    return offset
+
+def vectorized_calculate_offset_ncc(ref: np.array, child: np.array, max_offset: float=0.1) -> tuple:
+
+    if max_offset>=1:
+            raise ValueError("Cannot offset by larger than image")
+    
+    max_offset=int(max_offset*min(ref.shape))
+
+    rows, cols = ref.shape
+    template_size = (rows-2*max_offset, cols-2*max_offset)
+
+
+    child_patch = child[max_offset:max_offset + template_size[0], max_offset:max_offset + template_size[1]]
+    child_patch_normed = normalize_matrix(child_patch)
+
+    ref_windows = np.array(sliding_window(ref, template_size), copy=True)
+
+    means = np.mean(ref_windows, axis=(-2,-1), keepdims=True)
+
+    sigmas = np.std(ref_windows, axis=(-2,-1), keepdims=True)
+    sigmas = np.where(sigmas==0, 1.0, sigmas)
+
+    ref_windows -= means
+    ref_windows /= sigmas
+
+    ref_windows *= child_patch[np.newaxis, np.newaxis, :, :]
+    ncc_map = np.sum(ref_windows, axis=(-2, -1))
+    max_y, max_x = np.unravel_index(np.argmax(ncc_map), ncc_map.shape)
+
+    offset = (max_y-max_offset, max_x-max_offset)
+
+    return offset
+
+
+def align_and_crop(b: np.array, g: np.array, g_offset: tuple, r: np.array, r_offset: tuple) -> tuple:
+    rows, cols = b.shape
+
+    (gi, gj), (ri, rj) = g_offset, r_offset
+
+    top, bottom, left, right = max(g_offset[0], r_offset[0], 0), min(rows+g_offset[0], rows+r_offset[0], rows), max(g_offset[1], r_offset[1], 0), min(cols+g_offset[1], cols+r_offset[1], cols)
+
+    acb = b[top:bottom, left:right]
+    acg = g[top-gi:bottom-gi, left-gj:right-gj]
+    acr = r[top-ri:bottom-ri, left-rj:right-rj]
+
+    return (acr, acg, acb)
+
+def normalize_matrix(mat: np.array) -> np.array:
+    std = np.std(mat)
+    if std == 0:
+        return mat - np.mean(mat)
+    return (mat - np.mean(mat))/np.std(mat)
