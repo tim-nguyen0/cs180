@@ -6,15 +6,7 @@ import skimage.io as skio
 import align as align
 from pathlib import Path
 import time
-
-try:                                                      
-    import cupy as cp
-    from cupy.lib.stride_tricks import sliding_window_view as cp_sliding_window
-    cp.cuda.runtime.getDeviceCount()                       
-    USE_CUDA = True
-except Exception:
-    cp = None
-    USE_CUDA = False
+import cupy as cp
 
 
 def align_and_save(im_path: str, out_path: str, max_offset_initial: int=50, max_offset_step: int=5, crop_frac: float=0.3) -> np.array:
@@ -142,27 +134,55 @@ def vectorized_calculate_offset_ncc(ref_in: np.array, child: np.array, max_offse
     n = template_size[0]*template_size[1]
 
     child_patch = child[max_offset:max_offset + template_size[0], max_offset:max_offset + template_size[1]]
-
-    if USE_CUDA:                                          
-        xp, swv = cp, cp_sliding_window
-        ref, child_patch = cp.asarray(ref), cp.asarray(child_patch)
-    else:
-        xp, swv = np, sliding_window
-
     child_patch_normed = normalize_matrix(child_patch)
 
-    ref_windows = swv(ref, template_size)                
+    ref_windows = sliding_window(ref, template_size)
 
-    means = xp.sum(ref_windows, axis=(-2,-1))/n            
+    means = np.sum(ref_windows, axis=(-2,-1))/n
 
-    sum_sq = xp.einsum('ijhw,ijhw->ij', ref_windows, ref_windows)  
+    sum_sq = np.einsum('ijhw,ijhw->ij', ref_windows, ref_windows)
     variances = sum_sq / n - means**2
-    sigmas = xp.sqrt(xp.maximum(variances, 1e-12))         
+    sigmas = np.sqrt(np.maximum(variances, 1e-12))
 
-    ncc_map = xp.einsum('ijhw,hw->ij', ref_windows, child_patch_normed) / (n * sigmas)   
-    max_y, max_x = xp.unravel_index(xp.argmax(ncc_map), ncc_map.shape)   
+    ncc_map = np.einsum('ijhw,hw->ij', ref_windows, child_patch_normed) / (n * sigmas)   # CHANGED
+    max_y, max_x = np.unravel_index(np.argmax(ncc_map), ncc_map.shape)
 
-    offset = (int(max_y)-max_offset, int(max_x)-max_offset)   
+    offset = (max_y-max_offset, max_x-max_offset)
+
+    offset = (offset[0]+known_offset[0], offset[1]+known_offset[1])
+    return offset
+
+def vectorized_calculate_offset_ncc_cuda(ref_in: np.array, child: np.array, max_offset: int=5, known_offset: tuple=(0,0)) -> tuple:
+
+    ref_top= max(0, known_offset[0])
+    ref_bottom = ref_in.shape[0]+min(0, known_offset[0])
+    ref_left = max(0, known_offset[1])
+    ref_right = ref_in.shape[1]+min(0,known_offset[1])
+
+    ref = ref_in[ref_top:ref_bottom, ref_left:ref_right]
+
+    if max_offset>=2*min(ref.shape):
+            raise ValueError("Offset cannot be larger than image")
+
+    rows, cols = ref.shape
+    template_size = (rows-2*max_offset, cols-2*max_offset)
+    n = template_size[0]*template_size[1]
+
+    child_patch = child[max_offset:max_offset + template_size[0], max_offset:max_offset + template_size[1]]
+    child_patch_normed = normalize_matrix(child_patch)
+
+    ref_windows = sliding_window(ref, template_size)
+
+    means = np.sum(ref_windows, axis=(-2,-1))/n
+
+    sum_sq = np.einsum('ijhw,ijhw->ij', ref_windows, ref_windows)
+    variances = sum_sq / n - means**2
+    sigmas = np.sqrt(np.maximum(variances, 1e-12))
+
+    ncc_map = np.einsum('ijhw,hw->ij', ref_windows, child_patch_normed) / (n * sigmas)   # CHANGED
+    max_y, max_x = np.unravel_index(np.argmax(ncc_map), ncc_map.shape)
+
+    offset = (max_y-max_offset, max_x-max_offset)
 
     offset = (offset[0]+known_offset[0], offset[1]+known_offset[1])
     return offset
@@ -181,10 +201,9 @@ def align_and_crop(b: np.array, g: np.array, g_offset: tuple, r: np.array, r_off
 
     return (acr, acg, acb)
 
-def normalize_matrix(mat) -> np.array:
-    xp = cp.get_array_module(mat) if cp else np     
-    std, mean = xp.std(mat), xp.mean(mat)
-    if float(std) == 0:                                     
+def normalize_matrix(mat: np.array) -> np.array:
+    std, mean = np.std(mat), np.mean(mat)
+    if std == 0:
         return mat - mean
     return (mat - mean)/std
 
