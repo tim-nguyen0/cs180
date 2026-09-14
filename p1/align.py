@@ -1,12 +1,11 @@
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view as sliding_window
+import pyramid as pyramid
 
-def calculate_offset_ncc(ref: np.array, child: np.array, max_offset: float=0.1) -> tuple:
+def calculate_offset_ncc(ref: np.array, child: np.array, max_offset: int=100) -> tuple:
 
-    if max_offset>=1:
-        raise ValueError("Cannot offset by larger than image")
-
-    max_offset=int(max_offset*min(ref.shape))
+    if max_offset>=min(ref.shape):
+        raise ValueError("Offset cannot be larger than image")
 
     rows, cols = ref.shape
     max_ncc = -np.inf
@@ -41,12 +40,10 @@ def calculate_offset_ncc(ref: np.array, child: np.array, max_offset: float=0.1) 
 
     return offset
 
-def vectorized_calculate_offset_ncc(ref: np.array, child: np.array, max_offset: float=0.1) -> tuple:
+def vectorized_calculate_offset_ncc(ref: np.array, child: np.array, max_offset: int=5, center: tuple=(0,0)) -> tuple:
 
-    if max_offset>=1:
-            raise ValueError("Cannot offset by larger than image")
-    
-    max_offset=int(max_offset*min(ref.shape))
+    if max_offset>=min(ref.shape):
+            raise ValueError("Offset cannot be larger than image")
 
     rows, cols = ref.shape
     template_size = (rows-2*max_offset, cols-2*max_offset)
@@ -65,7 +62,7 @@ def vectorized_calculate_offset_ncc(ref: np.array, child: np.array, max_offset: 
     ref_windows -= means
     ref_windows /= sigmas
 
-    ref_windows *= child_patch[np.newaxis, np.newaxis, :, :]
+    ref_windows *= child_patch_normed[np.newaxis, np.newaxis, :, :]
     ncc_map = np.sum(ref_windows, axis=(-2, -1))
     max_y, max_x = np.unravel_index(np.argmax(ncc_map), ncc_map.shape)
 

@@ -9,7 +9,7 @@ import skimage.io as skio
 import align as align
 
 # name of the input file
-imname = 'cathedral_cropped.jpg'
+imname = 'cathedral.jpg'
 
 # read in the image
 path = "data/"+imname
@@ -17,6 +17,7 @@ im = skio.imread(path)
 
 # convert to double (might want to do this later on to save memory)    
 im = sk.img_as_float(im)
+
     
 # compute the height of each part (just 1/3 of total)
 height = np.floor(im.shape[0] / 3.0).astype(int)
