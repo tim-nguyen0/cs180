@@ -9,7 +9,7 @@ import skimage.io as skio
 import align as align
 
 # name of the input file
-imname = 'melons.tif'
+imname = 'siren.tif'
 
 # read in the image
 path = "data/"+imname
@@ -28,12 +28,8 @@ g = im[height: 2*height]
 r = im[2*height: 3*height]
 
 # align the images
-# g_offset = align.calculate_offset_ncc(b, g)
-# r_offset = align.calculate_offset_ncc(b, r)
-
-g_offset = align.calculate_offset_pyramid(b, g, step_max_offset=4)
-r_offset = align.calculate_offset_pyramid(b, r, step_max_offset=4)
-
+g_offset = align.calculate_offset_pyramid(b, g, step_max_offset=4, crop_frac=0.3)
+r_offset = align.calculate_offset_pyramid(b, r, step_max_offset=4, crop_frac=0.3)
 rgb_aligned = align.align_and_crop(b, g, g_offset, r, r_offset)
 
 # create a color image
