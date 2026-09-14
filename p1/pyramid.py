@@ -1,7 +1,7 @@
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view as sliding_window
 
-def mirror_pad_2(image):
+def mirror_pad_2(image: np.array):
     rows, cols = image.shape
 
     padded = np.zeros((rows+4, cols+4))
@@ -14,7 +14,7 @@ def mirror_pad_2(image):
 
     return padded
 
-def downsample_half(image):
+def downsample_half(image: np.array):
 
     padded = mirror_pad_2(image)
     windows = sliding_window(padded, (5,5))
@@ -29,7 +29,7 @@ def downsample_half(image):
 
     return downsampled
 
-def image_pyramid(image, depth):
+def image_pyramid(image: np.array, depth: int) -> list:
     """Return an image pyramid (list) of depth (depth) from (0) coarsest to (depth) finest"""
 
     pyramid = []
@@ -39,7 +39,7 @@ def image_pyramid(image, depth):
         pyramid.insert(0,downsample_half(pyramid[0]))
     return pyramid
 
-def auto_pyramid(image, target_max_dim):
+def auto_pyramid(image: np.array, target_max_dim: int=500)->list:
     """Returns a pyramid with coarsest image less target_max_dim"""
     depth = np.ceil(np.log2(max(image.shape)/target_max_dim))
     return image_pyramid(image, depth)

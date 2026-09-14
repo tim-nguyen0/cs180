@@ -2,6 +2,22 @@ import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view as sliding_window
 import pyramid as pyramid
 
+def calculate_offset_pyramid(ref: np.array, child: np.array, initial_max_offset: int=50, step_max_offset=5) -> tuple:
+    """Calculates offset for a larger image using image pyramid. Smallest image will be normalized to ~500 px on largest axis"""
+    child_pyramid = pyramid.auto_pyramid(child)
+    pdepth = len(child_pyramid)
+    ref_pyramid= pyramid.image_pyramid(ref, pdepth)
+
+    offset = vectorized_calculate_offset_ncc(ref_pyramid[0], child_pyramid[0], max_offset=initial_max_offset)
+
+    for i in range(1, pdepth):
+        offset = (offset[0]*2, offset[1]*2)
+        offset = vectorized_calculate_offset_ncc(ref_pyramid[i], child_pyramid[i], max_offset=step_max_offset, center=offset)
+
+    return offset
+
+
+
 def calculate_offset_ncc(ref: np.array, child: np.array, max_offset: int=100) -> tuple:
 
     if max_offset>=min(ref.shape):
@@ -40,9 +56,16 @@ def calculate_offset_ncc(ref: np.array, child: np.array, max_offset: int=100) ->
 
     return offset
 
-def vectorized_calculate_offset_ncc(ref: np.array, child: np.array, max_offset: int=5, center: tuple=(0,0)) -> tuple:
+def vectorized_calculate_offset_ncc(ref_in: np.array, child: np.array, max_offset: int=5, center: tuple=(0,0)) -> tuple:
 
-    if max_offset>=min(ref.shape):
+    ref_top= max(0, center[0])
+    ref_bottom = ref_in.shape[0]+min(0, center[0])
+    ref_left = max(0, center[1])
+    ref_right = ref_in.shape[1]+min(0,center[1])
+
+    ref = ref_in[ref_top:ref:ref_bottom, ref_left:ref_right]
+
+    if max_offset>=2*min(ref.shape):
             raise ValueError("Offset cannot be larger than image")
 
     rows, cols = ref.shape
