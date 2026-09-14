@@ -6,7 +6,6 @@ import skimage.io as skio
 import align as align
 from pathlib import Path
 import time
-import cupy as cp
 
 
 def align_and_save(im_path: str, out_path: str, max_offset_initial: int=50, max_offset_step: int=5, crop_frac: float=0.3) -> np.array:

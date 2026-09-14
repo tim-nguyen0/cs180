@@ -14,20 +14,19 @@ def mirror_pad_2(image: np.array):
 
     return padded
 
-def downsample_half(image: np.array):
+def gaussian_blur_5(image:np.array) -> np.array:
+
+    binom_vec_5 = np.array([1, 4, 6, 4, 1])
+    gaussian_kernel_5 = 1/256*np.outer(binom_vec_5,binom_vec_5)
 
     padded = mirror_pad_2(image)
     windows = sliding_window(padded, (5,5))
 
-    halved_windows = windows[::2,::2]
+    return np.einsum('ijhw,hw->ij', windows, gaussian_kernel_5)
 
-    binom_vec_5 = np.array([1, 4, 6, 4, 1])
 
-    gaussian_kernel_5 = 1/256*np.outer(binom_vec_5,binom_vec_5)
-
-    downsampled = np.sum(halved_windows * gaussian_kernel_5, axis=(2, 3))
-
-    return downsampled
+def downsample_half(image: np.array):
+    return gaussian_blur_5(image)[::2, ::2]
 
 def image_pyramid(image: np.array, depth: int) -> list:
     """Return an image pyramid (list) of depth (depth) from (0) coarsest to (depth) finest"""
@@ -44,7 +43,8 @@ def auto_pyramid(image: np.array, target_max_dim: int=800)->list:
     depth = int(np.ceil(np.log2(max(image.shape)/target_max_dim)))
     return image_pyramid(image, max(depth, 0) + 1)
         
-
+def high_pass(image: np.array):
+    return image - gaussian_blur_5(image)
 
 
 
