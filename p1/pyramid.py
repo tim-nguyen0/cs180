@@ -28,23 +28,35 @@ def gaussian_blur_5(image:np.array) -> np.array:
 def downsample_half(image: np.array):
     return gaussian_blur_5(image)[::2, ::2]
 
-def image_pyramid(image: np.array, depth: int) -> list:
+def image_pyramid(image: np.array, depth: int, filter=None) -> list:
     """Return an image pyramid (list) of depth (depth) from (0) coarsest to (depth) finest"""
 
-    pyramid = []
-    pyramid.append(image)
+    pyramid = [image]
     
     for i in range(depth-1):
         pyramid.insert(0,downsample_half(pyramid[0]))
-    return pyramid
 
-def auto_pyramid(image: np.array, target_max_dim: int=800)->list:
+    if not filter:
+        return pyramid
+
+    return [filter(x) for x in pyramid]
+
+def auto_pyramid(image: np.array, target_max_dim: int=800, filter=None)->list:
     """Returns a pyramid with coarsest image less target_max_dim"""
     depth = int(np.ceil(np.log2(max(image.shape)/target_max_dim)))
-    return image_pyramid(image, max(depth, 0) + 1)
+    return image_pyramid(image, max(depth, 0) + 1, filter)
         
 def high_pass(image: np.array):
-    return image - gaussian_blur_5(image)
+    return image - gaussian_blur_5((image))
+
+def band_pass(image, low=2, high=5):
+    a = image
+    for i in range(low): a = gaussian_blur_5(a)
+    b = a
+    for i in range(high-low): b= gaussian_blur_5(b)
+    return a-b
+
+
 
 
 
