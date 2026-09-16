@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Project 1</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="page">
+        <header class="site-header">
+            <h1>Project 1: Colorizing the Prokudin-Gorskii Photo Collection</h1>
+            <p class="subtitle">Tim Nguyen</p>
+        </header>
+
+        <nav class="nav">
+            <a href="#overview">Overview</a>
+            <a href="#cropped">Hand-cropped plates</a>
+            <a href="#single-scale">Single-scale</a>
+            <a href="#pyramid">Pyramid</a>
+            <a href="#results">Results</a>
+            <a href="#progression">What I tried</a>
+            <a href="#bells">Bells &amp; whistles</a>
+            <a href="#failures">Failure cases</a>
+            <a href="../index.html">&larr; Portfolio</a>
+        </nav>
+
+        <main class="content">
+
+            <section id="overview">
+                <h2>Overview</h2>
+                <p>Prokudin-Gorskii took three photos of every scene, one through a red filter, one
+                through green and one through blue, and recorded all three onto a single glass
+                plate stacked vertically. So a digitized plate is one tall grayscale image holding
+                three pictures of the same thing, taken a moment apart, with the camera never quite
+                back in the same place between shots. To get the color photo back we cut the plate
+                into thirds, work out how far each channel drifted, and stack them as RGB.</p>
+                <p>Everything below is roughly in the order I actually did it, since most of the
+                choices here were reactions to something breaking.</p>
+            </section>
+
+
+            <section id="cropped">
+                <h2>Hand-cropped plates</h2>
+
+                <p>Three of the small plates show up twice in my results, once as the original scan
+                and once hand-cropped. To be clear about what's being compared: the hand-cropping
+                was done to the <em>input</em> plates, and both versions below are outputs of the
+                final pipeline. The crops were done manually because at the time I wasn't doing any
+                cropping in code. The serial NCC ran over the whole plate including the
+                scan borders, and those borders are nearly identical in all three channels and run
+                the full height and width, so they match strongly at zero displacement and drag the
+                estimate toward no movement at all. Cropping them off by hand was the fastest way
+                to get something usable while the matching code was still simple.</p>
+
+                <div class="compare">
+                    <figure>
+                        <img src="resources/cathedral_thumb.jpg" alt="Cathedral, full plate">
+                        <figcaption>cathedral (full plate)</figcaption>
+                    </figure>
+                    <figure>
+                        <img src="resources/cathedral_cropped_thumb.jpg" alt="Cathedral, hand-cropped plate">
+                        <figcaption>cathedral (hand-cropped)</figcaption>
+                    </figure>
+                    <figure>
+                        <img src="resources/monastery_thumb.jpg" alt="Monastery, full plate">
+                        <figcaption>monastery (full plate)</figcaption>
+                    </figure>
+                    <figure>
+                        <img src="resources/monastery_cropped_thumb.jpg" alt="Monastery, hand-cropped plate">
+                        <figcaption>monastery (hand-cropped)</figcaption>
+                    </figure>
+                    <figure>
+                        <img src="resources/tobolsk_thumb.jpg" alt="Tobolsk, full plate">
+                        <figcaption>tobolsk (full plate)</figcaption>
+                    </figure>
+                    <figure>
+                        <img src="resources/tobolsk_cropped_thumb.jpg" alt="Tobolsk, hand-cropped plate">
+                        <figcaption>tobolsk (hand-cropped)</figcaption>
+                    </figure>
+                </div>
+
+                <p>By the end this stopped mattering. Vectorizing the search forced a crop anyway,
+                and <code>crop_frac</code> now trims a fixed fraction off every side before
+                matching, so the full plates align just as well as the hand-cropped ones. I kept
+                both in the results.</p>
+            </section>
+
+
+            <section id="single-scale">
+                <h2>Single-scale alignment</h2>
+
+                <h3>Splitting the plate and searching displacements</h3>
+                <p>The plate height doesn't usually divide evenly by three, so I take
+                <code>floor(h/3)</code> and let the last rows drop off the bottom. Blue is the
+                reference because it's the first third. Green and red each get their own
+                independent search over vertical and horizontal displacement.</p>
+
+                <h3>Scoring with normalized cross-correlation</h3>
+                <p>I skipped SSD entirely and went straight to NCC. The three exposures don't just
+                sit in different places, they're different brightnesses, since each filter passed a
+                different amount of light and the plates have aged since. Matching on raw intensity
+                slides the image to wherever the brightness agrees, which isn't the same place as
+                where the structure agrees. Normalizing each patch to zero mean and unit standard
+                deviation before correlating throws the brightness out and leaves only the question
+                I care about, which is whether the two patterns line up.</p>
+
+                <h3>Results on the small JPEGs</h3>
+                <p>The small plates are about 390&times;1024, small enough to search exhaustively at
+                full resolution without any of the machinery in the rest of this page, and the
+                serial version handled all three without trouble. The images below aren't its
+                output though. Every result on this page is from the final pipeline, except the
+                emir filter comparison further down, which is labeled.</p>
+
+                <div class="grid">
+                    <figure>
+                        <a href="resources/cathedral.jpg"><img src="resources/cathedral_thumb.jpg" alt="Cathedral, aligned"></a>
+                        <figcaption>cathedral.jpg</figcaption>
+                    </figure>
+                    <figure>
+                        <a href="resources/monastery.jpg"><img src="resources/monastery_thumb.jpg" alt="Monastery, aligned"></a>
+                        <figcaption>monastery.jpg</figcaption>
+                    </figure>
+                    <figure>
+                        <a href="resources/tobolsk.jpg"><img src="resources/tobolsk_thumb.jpg" alt="Tobolsk, aligned"></a>
+                        <figcaption>tobolsk.jpg</figcaption>
+                    </figure>
+                </div>
+
+                <h3>Vectorizing the search</h3>
+                <p>The first version is a double loop over every candidate <code>(i, j)</code>,
+                slicing the overlapping region out of both channels, normalizing both, and taking
+                the mean of their product. It works, and it redoes nearly all of its work on every
+                iteration, since each offset renormalizes the whole overlap from scratch.</p>
+                <p>Then I vectorized it with <code>sliding_window_view</code>, which builds every
+                candidate window at once and computes the whole correlation surface in one go. This
+                is also where the automatic crop first showed up, not as a feature but because it
+                was the only way to vectorize: every window has to be the same shape for the
+                strided view to exist. So the template is the child channel shrunk by
+                <code>max_offset</code> on all four sides, and the reference supplies every
+                <code>template_size</code> window that fits. The template also only needs
+                normalizing once now instead of once per offset.</p>
+
+                <h3>Keeping memory in check</h3>
+                <p>That version was supposed to avoid instantiating a copy of the sliding window,
+                and then did it anyway when I computed the means and sigmas. Ordinary reductions
+                materialize the view, and the view holds one full-size template for every candidate
+                offset. On the small jpgs I didn't notice. On the tifs it wanted tebibytes and died
+                on the spot.</p>
+                <p>So I did some research and found <code>einsum</code>, which turned out to be
+                exactly right for this. Both quantities I need are contractions over the strided
+                view, so <code>einsum</code> walks the strides directly and never instantiates
+                anything: <code>np.einsum('ijhw,ijhw-&gt;ij', ref_windows, ref_windows)</code> for
+                the per-window sums of squares, and
+                <code>np.einsum('ijhw,hw-&gt;ij', ref_windows, child_patch_normed)</code> for the
+                correlation surface itself. Variances come from the sums of squares and the means
+                by the usual identity. Memory use drops to something reasonable and the whole
+                search becomes two contractions.</p>
+                <p>The other memory thing was how a known offset from the previous pyramid level
+                gets applied. Rolling the reference array copies it, and it also wraps content
+                around from the opposite edge, which is real content showing up in the wrong place.
+                Pre-slicing the reference to the shifted overlap instead is a view, costs nothing,
+                and doesn't wrap.</p>
+            </section>
+
+
+            <section id="pyramid">
+                <h2>Multiscale pyramid</h2>
+
+                <p>With <code>einsum</code> in place the big tifs aligned decently, but the
+                runtimes were really long. The plates are roughly 3700&times;9650 and the real
+                displacement between channels can be well over a hundred pixels, so a single-scale
+                search needs a window big enough to contain that, evaluated against images that
+                size. Almost all of that surface is nowhere near the answer. So, pyramid: find the
+                displacement on a small version where a wide window is cheap, then walk down
+                refining it.</p>
+
+                <h3>Building the pyramid</h3>
+                <p>The blur and the pyramid are both handrolled. The blur is the 5&times;5 binomial
+                kernel, the outer product of <code>[1, 4, 6, 4, 1]</code> with itself over 256.
+                Edges are mirror-padded by two pixels so the blur doesn't darken the border, and
+                the convolution is <code>sliding_window_view</code> plus <code>einsum</code> again.
+                A pyramid level is a blur followed by <code>[::2, ::2]</code>.</p>
+                <p><code>auto_pyramid</code> picks the depth from the image instead of taking it as
+                an argument, choosing the smallest depth whose coarsest level fits under a target
+                on its largest axis. I started with a ~500px target and later raised it to 800. For
+                the full-resolution plates that comes out to five levels.</p>
+
+                <h3>Coarse-to-fine refinement</h3>
+                <p>At the coarsest level I search wide, since that level is small enough that a wide
+                window is nearly free and the whole point is to catch the full displacement. Each
+                step down, the estimate doubles along with the resolution and then gets refined
+                with a much smaller search around that prediction. I settled on &plusmn;10 pixels
+                for the refinement passes. Below that, errors at one level can't be recovered at
+                the next, and church in particular was coming out more than six pixels off while
+                everything else was perfect, which is what a too-tight refinement window looks
+                like.</p>
+                <p>With the pyramid working and the parameters roughly tuned, images were taking
+                about 5&ndash;10 seconds each.</p>
+            </section>
+
+
+            <section id="results">
+                <h2>Results</h2>
+
+                <p>Final settings: <code>initial_search_frac=0.4</code>,
+                <code>max_offset_step=10</code>, <code>crop_frac=0.4</code>, band-pass filtering at
+                every pyramid level. On a 7950X / RTX 4090 / Ubuntu 26.04 box, CPU only since the
+                GPU version didn't pan out, a full-resolution tif takes just under 20 seconds and
+                the small jpgs are near instant.</p>
+
+                <h3>Provided images</h3>
+                <div class="grid">
+                    <figure>
+                        <a href="resources/cathedral.jpg"><img src="resources/cathedral_thumb.jpg" alt="Cathedral"></a>
+                        <figcaption>cathedral</figcaption>
+                    </figure>
+                    <figure>
+                        <a href="resources/monastery.jpg"><img src="resources/monastery_thumb.jpg" alt="Monastery"></a>
+                        <figcaption>monastery</figcaption>
+                    </figure>
+                    <figure>
+                        <a href="resources/tobolsk.jpg"><img src="resources/tobolsk_thumb.jpg" alt="Tobolsk"></a>
+                        <figcaption>tobolsk</figcaption>
+                    </figure>
+                    <figure>
+                        <a href="resources/church.jpg"><img src="resources/church_thumb.jpg" alt="Church"></a>
+                        <figcaption>church</figcaption>
+                    </figure>
+                    <figure>
+                        <a href="resources/emir.jpg"><img src="resources/emir_thumb.jpg" alt="Emir"></a>
+                        <figcaption>emir</figcaption>
+                    </figure>
+                    <figure>
+                        <a href="resources/harvesters.jpg"><img src="resources/harvesters_thumb.jpg" alt="Harvesters"></a>
+                        <figcaption>harvesters</figcaption>
+                    </figure>
+                    <figure>
+                        <a href="resources/icon.jpg"><img src="resources/icon_thumb.jpg" alt="Icon"></a>
+                        <figcaption>icon</figcaption>
+                    </figure>
+                    <figure>
+                        <a href="resources/melons.jpg"><img src="resources/melons_thumb.jpg" alt="Melons"></a>
+                        <figcaption>melons</figcaption>
+                    </figure>
+                    <figure>
+                        <a href="resources/self_portrait.jpg"><img src="resources/self_portrait_thumb.jpg" alt="Self portrait"></a>
+                        <figcaption>self_portrait</figcaption>
+                    </figure>
+                    <figure>
+                        <a href="resources/siren.jpg"><img src="resources/siren_thumb.jpg" alt="Siren"></a>
+                        <figcaption>siren</figcaption>
+                    </figure>
+                    <figure>
+                        <a href="resources/three_generations.jpg"><img src="resources/three_generations_thumb.jpg" alt="Three generations"></a>
+                        <figcaption>three_generations</figcaption>
+                    </figure>
+                    <figure>
+                        <a href="resources/ilemselga.jpg"><img src="resources/ilemselga_thumb.jpg" alt="Ilemselga"></a>
+                        <figcaption>ilemselga</figcaption>
+                    </figure>
+                    <figure>
+                        <a href="resources/religous_painting.jpg"><img src="resources/religous_painting_thumb.jpg" alt="Religious painting"></a>
+                        <figcaption>religous_painting</figcaption>
+                    </figure>
+                    <figure>
+                        <a href="resources/wharf.jpg"><img src="resources/wharf_thumb.jpg" alt="Wharf"></a>
+                        <figcaption>wharf</figcaption>
+                    </figure>
+                </div>
+
+                <h3>Images I picked myself</h3>
+                <p>These three are ones I went and found in the Library of Congress collection
+                myself, run through the same pipeline with the same settings as everything
+                above.</p>
+                <div class="grid">
+                    <figure>
+                        <a href="resources/forest_river.jpg"><img src="resources/forest_river_thumb.jpg" alt="Forest river"></a>
+                        <figcaption>forest_river</figcaption>
+                    </figure>
+                    <figure>
+                        <a href="resources/dress.jpg"><img src="resources/dress_thumb.jpg" alt="Dress"></a>
+                        <figcaption>dress</figcaption>
+                    </figure>
+                    <figure>
+                        <a href="resources/cabin.jpg"><img src="resources/cabin_thumb.jpg" alt="Cabin"></a>
+                        <figcaption>cabin</figcaption>
+                    </figure>
+                </div>
+            </section>
+
+
+            <section id="progression">
+                <h2>Getting there: what I tried</h2>
+
+                <p>Everything below is a full run over all seventeen inputs with one thing changed,
+                each kept in its own output directory so I could compare them. I decided early that
+                the pipeline should have exactly one real hyperparameter, the crop fraction, and
+                stuck to it. Anything that only worked because I'd tuned a per-image constant
+                didn't count as working.</p>
+
+                <h3>Crop fraction: 0.3 &rarr; 0.35 &rarr; 0.4</h3>
+                <p><code>interior()</code> trims <code>crop_frac</code> off each side before
+                matching, so 0.3 keeps the middle 40%&times;40% of the plate and 0.4 keeps the
+                middle 20%&times;20%. Cropping harder removes more border and more of whatever else
+                is confusing the match, at the cost of less signal left to correlate. Church is the
+                image that wanted aggressive cropping and it's what drove the increases. Raising
+                the coarsest-level target to 800px and the refinement window to &plusmn;10 both
+                helped it, but going from 0.3 to 0.4 is what actually fixed it.</p>
+
+                <h3>From raw pixels to filtered features</h3>
+                <p>Raw intensity is what breaks emir. Its channels have different gamma, so the
+                robe is bright in one exposure and dark in another, and the correlation ends up
+                chasing a brightness relationship that doesn't hold across the image. NCC's global
+                normalization doesn't save it, because the difference isn't a single global offset
+                and scale.</p>
+                <p>A high pass, <code>image - blur(image)</code>, fixes emir on its own. I went
+                with a band pass instead because it fixes emir and helps elsewhere too. It's a
+                difference of Gaussians built out of repeated applications of the same 5-tap blur,
+                two passes minus five passes, so an effective &sigma; of about &radic;2 against
+                about &radic;5. That drops the slow brightness variation the way the high pass
+                does, and also drops the finest scale, meaning scan grain and the water ripple
+                texture in church that I suspected was part of its problem.</p>
+
+                <div class="compare">
+                    <figure>
+                        <img src="resources/ablation/emir_nofilter.jpg" alt="Emir aligned on raw intensity">
+                        <figcaption>no filter (raw intensity)</figcaption>
+                    </figure>
+                    <figure>
+                        <img src="resources/ablation/emir_bandpass.jpg" alt="Emir aligned on band-passed images">
+                        <figcaption>band-pass (final)</figcaption>
+                    </figure>
+                </div>
+                <p>Both of those are emir re-run at the final settings with only the filter
+                changed, so the comparison isn't contaminated by a different crop fraction. High
+                pass isn't shown because it finds the same offsets as the band pass here and the
+                output is byte-identical, which is the clearest way to say that the high pass
+                already solves emir on its own.</p>
+
+                <p>The surprise was melons. Aligning on band-passed images fixed a failure that had
+                nothing to do with emir's gamma problem. At higher crop fractions melons was
+                landing badly, and I suspect it's because the small central region left after
+                cropping is mostly smooth fruit whose pixel values are too similar to each other
+                for intensity matching to find anything to grip on. The band pass turns that region
+                into edges, so there's structure to align even in the middle of the image.
+                Cropping harder and filtering for edges ended up working together rather than
+                against each other.</p>
+                <p>I had meant to do something explicitly in the frequency domain as well, but
+                reading further convinced me a Fourier approach would mostly be doing the same job
+                the band pass already does here, so I left it.</p>
+
+                <h3>Fixed search window &rarr; normalized search fraction</h3>
+                <p>The coarsest-level search budget started as a fixed pixel count, 200 and then
+                250. That's hard to reason about, because the coarsest pyramid level is a different
+                size for every plate, so the same 250 pixels means something different each time.
+                <code>initial_search_frac</code> makes it a fraction of the smaller dimension of the
+                coarsest level instead, so the budget means the same thing everywhere. The actual
+                value, like the rest of the constants here, came from running the batch and seeing
+                what worked.</p>
+
+                <h3>The CUDA detour</h3>
+                <p>At this point I had decent alignment on the bigger tifs but really long
+                runtimes, so I took a detour and tried CUDA, swapping the appropriate
+                <code>np</code> operations for <code>cp</code>. The problem was that sliding window
+                with CuPy instantiates a copy, which is exactly the allocation the whole
+                <code>einsum</code> approach exists to avoid, and there was nowhere near enough
+                memory for it even with 24GB of VRAM. I could have blocked it into separate crops,
+                but I shelved it instead and moved on to the pyramid. In hindsight the blocked
+                version might have helped church, for reasons that come up below.</p>
+            </section>
+
+
+            <section id="bells">
+                <h2>Bells &amp; whistles</h2>
+
+                <h3>Better features: band-pass filtering</h3>
+                <p>Alignment runs on band-pass filtered images rather than raw pixels, at every
+                pyramid level. As above, this is what makes emir work at all, and it's also what
+                rescued melons at the crop fractions the rest of the set wanted.</p>
+
+                <h3>Automatic overlap cropping</h3>
+                <p>Shifting two channels to align them leaves bands along the edges where only some
+                of the channels have data, which come out as saturated single-color strips.
+                <code>align_and_crop</code> intersects the three shifted rectangles and keeps only
+                the region all three cover, so those bands never reach the output. It's worth being
+                clear about what this doesn't do: it removes artifacts created by the alignment,
+                not the original black and white scan borders, which are part of the plate and
+                survive into the final images.</p>
+
+                <h3>Handrolled blur and pyramid</h3>
+                <p>The blur, the pyramid, the decimation and both filters are all implemented
+                directly rather than pulled from <code>skimage</code> or <code>scipy.ndimage</code>.
+                The convolution uses the same <code>sliding_window_view</code> and
+                <code>einsum</code> pattern as the matching code, so the whole project is
+                essentially one idea applied twice.</p>
+            </section>
+
+
+            <section id="failures">
+                <h2>Failure cases and remaining issues</h2>
+                <p>Emir is the intended hard case and it's fine now, since the band pass handles
+                the gamma mismatch between its channels.</p>
+                <p>Church is the one that still leaves a bit to be desired. It aligns correctly, but only because the
+                crop fraction is set aggressively enough to cut away most of the plate, and that
+                setting is global. The features I think are causing the trouble are the water
+                ripples and the open sky, both big regions of repetitive or near-featureless
+                texture that a correlation is happy to match at the wrong offset, plus some actual
+                misalignment in the outer buildings, though I believe this is due to movement. 
+                Cropping to the center avoids them, which fixes it here and in this dataset, but
+                I'd have preferred to find something that let me crop less since images with defining features
+                on the edges might be affected. Sticking to one global hyperparameter means church sets the crop fraction
+                for everything else.</p>
+                <p>The scan borders also survive in every output, since nothing in the pipeline
+                detects or removes them.
+                </p>
+            </section>
+
+        </main>
+    </div>
+</body>
+</html>
