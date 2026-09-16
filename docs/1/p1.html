@@ -98,20 +98,18 @@
 
                 <figure class="code">
                   <figcaption>align.py &mdash; splitting the plate</figcaption>
-                  <pre><code>
-                  # compute the height of each part (just 1/3 of total)
-                  height = np.floor(im.shape[0] / 3.0).astype(int)
+                  <pre><code># compute the height of each part (just 1/3 of total)
+height = np.floor(im.shape[0] / 3.0).astype(int)
 
-                  # separate color channels
-                  b = im[:height]
-                  g = im[height: 2*height]
-                  r = im[2*height: 3*height]
+# separate color channels
+b = im[:height]
+g = im[height: 2*height]
+r = im[2*height: 3*height]
 
-                  # align the images
-                  g_offset = calculate_offset_pyramid(b, g, step_max_offset=max_offset_step, initial_search_frac=initial_search_frac, crop_frac=crop_frac)
-                  r_offset = calculate_offset_pyramid(b, r, step_max_offset=max_offset_step, initial_search_frac=initial_search_frac, crop_frac=crop_frac)
-                  rgb_aligned = align_and_crop(b, g, g_offset, r, r_offset)
-                  </code></pre>
+# align the images
+g_offset = calculate_offset_pyramid(b, g, step_max_offset=max_offset_step, initial_search_frac=initial_search_frac, crop_frac=crop_frac)
+r_offset = calculate_offset_pyramid(b, r, step_max_offset=max_offset_step, initial_search_frac=initial_search_frac, crop_frac=crop_frac)
+rgb_aligned = align_and_crop(b, g, g_offset, r, r_offset)</code></pre>
                 </figure>
 
                 <h3>Scoring with normalized cross-correlation</h3>
@@ -125,18 +123,16 @@
 
                 <figure class="code">
                   <figcaption>align.py &mdash; the metric, and the crop it runs on</figcaption>
-                  <pre><code>
-                  def normalize_matrix(mat: np.array) -&gt; np.array:
-                      std, mean = np.std(mat), np.mean(mat)
-                      if std == 0:
-                          return mat - mean
-                      return (mat - mean)/std
+                  <pre><code>def normalize_matrix(mat: np.array) -&gt; np.array:
+    std, mean = np.std(mat), np.mean(mat)
+    if std == 0:
+        return mat - mean
+    return (mat - mean)/std
 
-                  def interior(img: np.array, frac: float = 0.1) -&gt; np.array:
-                      """helper function to crop with"""
-                      h, w = img.shape
-                      return img[int(h*frac):int(h*(1-frac)), int(w*frac):int(w*(1-frac))]
-                  </code></pre>
+def interior(img: np.array, frac: float = 0.1) -&gt; np.array:
+    """helper function to crop with"""
+    h, w = img.shape
+    return img[int(h*frac):int(h*(1-frac)), int(w*frac):int(w*(1-frac))]</code></pre>
                 </figure>
 
                 <h3>Results on the small JPEGs</h3>
@@ -169,34 +165,32 @@
 
                 <figure class="code">
                   <figcaption>align.py &mdash; calculate_offset_ncc, the naive search</figcaption>
-                  <pre><code>
-                  for i in range(-max_offset, max_offset):
-                      for j in range(-max_offset, max_offset):
+                  <pre><code>for i in range(-max_offset, max_offset):
+    for j in range(-max_offset, max_offset):
 
-                          ref_top = max(0, i)
-                          ref_bottom = min(rows, rows + i)
-                          ref_left = max(0, j)
-                          ref_right = min(cols, cols + j)
+        ref_top = max(0, i)
+        ref_bottom = min(rows, rows + i)
+        ref_left = max(0, j)
+        ref_right = min(cols, cols + j)
 
-                          child_top = max(0, -i)
-                          child_bottom = min(rows, rows - i)
-                          child_left = max(0, -j)
-                          child_right = min(cols, cols - j)
+        child_top = max(0, -i)
+        child_bottom = min(rows, rows - i)
+        child_left = max(0, -j)
+        child_right = min(cols, cols - j)
 
-                          ref_patch = ref[ref_top:ref_bottom, ref_left:ref_right]
-                          child_patch = child[child_top:child_bottom, child_left:child_right]
+        ref_patch = ref[ref_top:ref_bottom, ref_left:ref_right]
+        child_patch = child[child_top:child_bottom, child_left:child_right]
 
-                          if ref_patch.shape[0] &lt; (rows * 0.7) or ref_patch.shape[1] &lt; (cols * 0.7):
-                              continue
+        if ref_patch.shape[0] &lt; (rows * 0.7) or ref_patch.shape[1] &lt; (cols * 0.7):
+            continue
 
-                          normalized_ref = normalize_matrix(ref_patch)
-                          normalized_child = normalize_matrix(child_patch)
-                          current_ncc = np.mean(normalized_ref * normalized_child)
+        normalized_ref = normalize_matrix(ref_patch)
+        normalized_child = normalize_matrix(child_patch)
+        current_ncc = np.mean(normalized_ref * normalized_child)
 
-                          if current_ncc&gt;max_ncc:
-                              max_ncc = current_ncc
-                              offset = (i,j)
-                  </code></pre>
+        if current_ncc&gt;max_ncc:
+            max_ncc = current_ncc
+            offset = (i,j)</code></pre>
                 </figure>
                 <p>Then I vectorized it with <code>sliding_window_view</code>, which builds every
                 candidate window at once and computes the whole correlation surface in one go. This
@@ -209,16 +203,14 @@
 
                 <figure class="code">
                   <figcaption>align.py &mdash; vectorized_calculate_offset_ncc, setting up the windows</figcaption>
-                  <pre><code>
-                  rows, cols = ref.shape
-                  template_size = (rows-2*max_offset, cols-2*max_offset)
-                  n = template_size[0]*template_size[1]
+                  <pre><code>rows, cols = ref.shape
+template_size = (rows-2*max_offset, cols-2*max_offset)
+n = template_size[0]*template_size[1]
 
-                  child_patch = child[max_offset:max_offset + template_size[0], max_offset:max_offset + template_size[1]]
-                  child_patch_normed = normalize_matrix(child_patch)
+child_patch = child[max_offset:max_offset + template_size[0], max_offset:max_offset + template_size[1]]
+child_patch_normed = normalize_matrix(child_patch)
 
-                  ref_windows = sliding_window(ref, template_size)
-                  </code></pre>
+ref_windows = sliding_window(ref, template_size)</code></pre>
                 </figure>
 
                 <h3>Keeping memory in check</h3>
@@ -237,18 +229,16 @@
 
                 <figure class="code">
                   <figcaption>align.py &mdash; the two contractions</figcaption>
-                  <pre><code>
-                  means = np.sum(ref_windows, axis=(-2,-1))/n
+                  <pre><code>means = np.sum(ref_windows, axis=(-2,-1))/n
 
-                  sum_sq = np.einsum('ijhw,ijhw-&gt;ij', ref_windows, ref_windows)
-                  variances = sum_sq / n - means**2
-                  sigmas = np.sqrt(np.maximum(variances, 1e-12))
+sum_sq = np.einsum('ijhw,ijhw-&gt;ij', ref_windows, ref_windows)
+variances = sum_sq / n - means**2
+sigmas = np.sqrt(np.maximum(variances, 1e-12))
 
-                  ncc_map = np.einsum('ijhw,hw-&gt;ij', ref_windows, child_patch_normed) / (n * sigmas)
-                  max_y, max_x = np.unravel_index(np.argmax(ncc_map), ncc_map.shape)
+ncc_map = np.einsum('ijhw,hw-&gt;ij', ref_windows, child_patch_normed) / (n * sigmas)
+max_y, max_x = np.unravel_index(np.argmax(ncc_map), ncc_map.shape)
 
-                  offset = (max_y-max_offset, max_x-max_offset)
-                  </code></pre>
+offset = (max_y-max_offset, max_x-max_offset)</code></pre>
                 </figure>
                 <p>The other memory thing was how a known offset from the previous pyramid level
                 gets applied. Rolling the reference array copies it, and it also wraps content
@@ -278,21 +268,19 @@
 
                 <figure class="code">
                   <figcaption>pyramid.py &mdash; the blur and one level down</figcaption>
-                  <pre><code>
-                  def gaussian_blur_5(image:np.array) -&gt; np.array:
+                  <pre><code>def gaussian_blur_5(image:np.array) -&gt; np.array:
 
-                      binom_vec_5 = np.array([1, 4, 6, 4, 1])
-                      gaussian_kernel_5 = 1/256*np.outer(binom_vec_5,binom_vec_5)
+    binom_vec_5 = np.array([1, 4, 6, 4, 1])
+    gaussian_kernel_5 = 1/256*np.outer(binom_vec_5,binom_vec_5)
 
-                      padded = mirror_pad_2(image)
-                      windows = sliding_window(padded, (5,5))
+    padded = mirror_pad_2(image)
+    windows = sliding_window(padded, (5,5))
 
-                      return np.einsum('ijhw,hw-&gt;ij', windows, gaussian_kernel_5)
+    return np.einsum('ijhw,hw-&gt;ij', windows, gaussian_kernel_5)
 
 
-                  def downsample_half(image: np.array):
-                      return gaussian_blur_5(image)[::2, ::2]
-                  </code></pre>
+def downsample_half(image: np.array):
+    return gaussian_blur_5(image)[::2, ::2]</code></pre>
                 </figure>
                 <p><code>auto_pyramid</code> picks the depth from the image instead of taking it as
                 an argument, choosing the smallest depth whose coarsest level fits under a target
@@ -301,12 +289,10 @@
 
                 <figure class="code">
                   <figcaption>pyramid.py &mdash; picking the depth</figcaption>
-                  <pre><code>
-                  def auto_pyramid(image: np.array, target_max_dim: int=800, filter=None)-&gt;list:
-                      """Returns a pyramid with coarsest image less target_max_dim"""
-                      depth = int(np.ceil(np.log2(max(image.shape)/target_max_dim)))
-                      return image_pyramid(image, max(depth, 0) + 1, filter)
-                  </code></pre>
+                  <pre><code>def auto_pyramid(image: np.array, target_max_dim: int=800, filter=None)-&gt;list:
+    """Returns a pyramid with coarsest image less target_max_dim"""
+    depth = int(np.ceil(np.log2(max(image.shape)/target_max_dim)))
+    return image_pyramid(image, max(depth, 0) + 1, filter)</code></pre>
                 </figure>
 
                 <h3>Coarse-to-fine refinement</h3>
@@ -323,24 +309,22 @@
 
                 <figure class="code">
                   <figcaption>align.py &mdash; calculate_offset_pyramid, coarse to fine</figcaption>
-                  <pre><code>
-                  ref = interior(ref.astype(np.float32, copy=False), crop_frac)
-                  child = interior(child.astype(np.float32, copy=False), crop_frac)
+                  <pre><code>ref = interior(ref.astype(np.float32, copy=False), crop_frac)
+child = interior(child.astype(np.float32, copy=False), crop_frac)
 
-                  filter = lambda x: pyramid.band_pass(x)
-                  child_pyramid = pyramid.auto_pyramid(child, filter=filter)
-                  pdepth = len(child_pyramid)
-                  ref_pyramid= pyramid.image_pyramid(ref, pdepth, filter=filter)
+filter = lambda x: pyramid.band_pass(x)
+child_pyramid = pyramid.auto_pyramid(child, filter=filter)
+pdepth = len(child_pyramid)
+ref_pyramid= pyramid.image_pyramid(ref, pdepth, filter=filter)
 
-                  m = int(initial_search_frac * min(ref_pyramid[0].shape))      # relative to coarsest level; frac &lt; 0.5
-                  offset = vectorized_calculate_offset_ncc(ref_pyramid[0], child_pyramid[0], max_offset=m)
+m = int(initial_search_frac * min(ref_pyramid[0].shape))      # relative to coarsest level; frac &lt; 0.5
+offset = vectorized_calculate_offset_ncc(ref_pyramid[0], child_pyramid[0], max_offset=m)
 
-                  for i in range(1, pdepth):
-                      offset = (offset[0]*2, offset[1]*2)
-                      offset = vectorized_calculate_offset_ncc(ref_pyramid[i], child_pyramid[i], max_offset=step_max_offset, known_offset=offset)
+for i in range(1, pdepth):
+    offset = (offset[0]*2, offset[1]*2)
+    offset = vectorized_calculate_offset_ncc(ref_pyramid[i], child_pyramid[i], max_offset=step_max_offset, known_offset=offset)
 
-                  return offset
-                  </code></pre>
+return offset</code></pre>
                 </figure>
             </section>
 
@@ -469,17 +453,15 @@
 
                 <figure class="code">
                   <figcaption>pyramid.py &mdash; the two filters</figcaption>
-                  <pre><code>
-                  def high_pass(image: np.array):
-                      return image - gaussian_blur_5((image))
+                  <pre><code>def high_pass(image: np.array):
+    return image - gaussian_blur_5((image))
 
-                  def band_pass(image, low=2, high=5):
-                      a = image
-                      for i in range(low): a = gaussian_blur_5(a)
-                      b = a
-                      for i in range(high-low): b= gaussian_blur_5(b)
-                      return a-b
-                  </code></pre>
+def band_pass(image, low=2, high=5):
+    a = image
+    for i in range(low): a = gaussian_blur_5(a)
+    b = a
+    for i in range(high-low): b= gaussian_blur_5(b)
+    return a-b</code></pre>
                 </figure>
 
                 <div class="compare">
@@ -550,20 +532,18 @@
 
                 <figure class="code">
                   <figcaption>align.py &mdash; align_and_crop</figcaption>
-                  <pre><code>
-                  def align_and_crop(b: np.array, g: np.array, g_offset: tuple, r: np.array, r_offset: tuple) -&gt; tuple:
-                  rows, cols = b.shape
+                  <pre><code>def align_and_crop(b: np.array, g: np.array, g_offset: tuple, r: np.array, r_offset: tuple) -&gt; tuple:
+rows, cols = b.shape
 
-                  (gi, gj), (ri, rj) = g_offset, r_offset
+(gi, gj), (ri, rj) = g_offset, r_offset
 
-                  top, bottom, left, right = max(g_offset[0], r_offset[0], 0), min(rows+g_offset[0], rows+r_offset[0], rows), max(g_offset[1], r_offset[1], 0), min(cols+g_offset[1], cols+r_offset[1], cols)
+top, bottom, left, right = max(g_offset[0], r_offset[0], 0), min(rows+g_offset[0], rows+r_offset[0], rows), max(g_offset[1], r_offset[1], 0), min(cols+g_offset[1], cols+r_offset[1], cols)
 
-                  acb = b[top:bottom, left:right]
-                  acg = g[top-gi:bottom-gi, left-gj:right-gj]
-                  acr = r[top-ri:bottom-ri, left-rj:right-rj]
+acb = b[top:bottom, left:right]
+acg = g[top-gi:bottom-gi, left-gj:right-gj]
+acr = r[top-ri:bottom-ri, left-rj:right-rj]
 
-                  return (acr, acg, acb)
-                  </code></pre>
+return (acr, acg, acb)</code></pre>
                 </figure>
 
                 <h3>Handrolled blur and pyramid</h3>
