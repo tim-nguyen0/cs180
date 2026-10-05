@@ -7,14 +7,14 @@ import matplotlib.pyplot as plt
 from utils import load_image, save_grid
 
 
-def run_calathea_matcha():
-    plant = load_image(ROOT / "data" / "calathea.jpeg")
+def run_basil_plant_matcha():
+    plant = load_image(ROOT / "data" / "basil_plant.jpeg")
     with Image.open(ROOT / "data" / "matcha2.jpeg") as image:
         drink = np.asarray(ImageOps.exif_transpose(image).convert("RGB"), dtype=float) / 255
-    out = ROOT / "out" / "p2_4" / "calathea_matcha"
+    out = ROOT / "out" / "p2_4" / "basil_plant_matcha"
     prepared = out / "prepared"
     prepared.mkdir(parents=True, exist_ok=True)
-    save_grid([plant, drink], ["original calathea", "original matcha"], out / "originals.png")
+    save_grid([plant, drink], ["original basil plant", "original matcha"], out / "originals.png")
 
     scale = 640 / plant.shape[1]
     plant = cv2.resize(plant, (640, round(plant.shape[0] * scale)), interpolation=cv2.INTER_AREA)
@@ -60,13 +60,13 @@ def run_calathea_matcha():
     plant = np.clip(plant, 0, 1)**1.15
     plant = np.where((mask > 0.01)[..., None], plant, background)
 
-    plt.imsave(prepared / "calathea.png", plant)
+    plt.imsave(prepared / "basil_plant.png", plant)
     plt.imsave(prepared / "matcha.png", background)
     plt.imsave(prepared / "mask.png", mask, cmap="gray", vmin=0, vmax=1)
-    run_blend(prepared / "calathea.png", prepared / "matcha.png",
+    run_blend(prepared / "basil_plant.png", prepared / "matcha.png",
               prepared / "mask.png", sigma=1.0)
     (out / "alignment.txt").write_text(
-        "sources: p2/data/calathea.jpeg, p2/data/matcha2.jpeg\n"
+        "sources: p2/data/basil_plant.jpeg, p2/data/matcha2.jpeg\n"
         "plant width: 640; matcha width: 640 before scaling by 1.2\n"
         "matcha orientation corrected; upper background extended and blurred\n"
         "matcha lid center mapped from (300, 235) to (320, 665)\n"
@@ -76,4 +76,4 @@ def run_calathea_matcha():
 
 
 if __name__ == "__main__":
-    run_calathea_matcha()
+    run_basil_plant_matcha()

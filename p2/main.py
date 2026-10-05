@@ -1,14 +1,17 @@
 import argparse
 from pathlib import Path
+from time import perf_counter
 
+import cv2
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy.signal import convolve2d
 from skimage.color import rgb2gray
 
 from edges import finite_difference, dog_filters, derivative_of_gaussian
-from filters import gaussian_blur, gaussian_kernel, filter_image
+from filters import gaussian_blur, gaussian_kernel, filter_image, convolve_four_loops, convolve_two_loops
 from frequencies import unsharp_mask, unsharp_kernel, hybrid_image, fourier_magnitude
 from alignment import align_images
 from stacks import gaussian_stack, laplacian_stack
@@ -17,6 +20,66 @@ from utils import load_image, save_grid
 
 
 ROOT = Path(__file__).resolve().parent
+
+
+def run_convolution(image_path):
+    image = load_image(image_path, grayscale=True)
+    original_shape = image.shape
+    if max(image.shape) > 512:
+        scale = 512 / max(image.shape)
+        image = cv2.resize(image, (round(image.shape[1] * scale), round(image.shape[0] * scale)),
+                           interpolation=cv2.INTER_AREA)
+    out = ROOT / "out" / "p1_1" / image_path.stem
+    out.mkdir(parents=True, exist_ok=True)
+    kernels = {"box": np.ones((9, 9)) / 81,
+               "dx": np.array([[1, -1]]), "dy": np.array([[1], [-1]])}
+    results = {}
+    rows = ["filter,method,seconds,max_error"]
+    for name, kernel in kernels.items():
+        start = perf_counter()
+        reference = convolve2d(image, kernel, mode="same", boundary="fill", fillvalue=0)
+        elapsed = perf_counter() - start
+        rows.append(f"{name},scipy,{elapsed:.6f},0")
+        for label, method in [("four loops", convolve_four_loops), ("two loops", convolve_two_loops)]:
+            start = perf_counter()
+            result = method(image, kernel)
+            elapsed = perf_counter() - start
+            error = np.max(np.abs(result - reference))
+            rows.append(f"{name},{label},{elapsed:.6f},{error:.3e}")
+            if not np.allclose(result, reference, atol=1e-12, rtol=0):
+                raise ValueError(f"{label} does not match SciPy for {name}")
+            print(f"{name}, {label}: {elapsed:.3f}s, error {error:.3e}")
+        results[name] = result
+
+    plt.imsave(out / "original.png", image, cmap="gray", vmin=0, vmax=1)
+    plt.imsave(out / "box.png", results["box"], cmap="gray", vmin=0, vmax=1)
+    limit = max(np.percentile(np.abs(results["dx"][1:-1, 1:-1]), 99),
+                np.percentile(np.abs(results["dy"][1:-1, 1:-1]), 99), 1e-8)
+    fig, axes = plt.subplots(1, 4, figsize=(14, 5))
+    for ax, name, title in zip(axes, ["original", "box", "dx", "dy"],
+                               ["original", "9 x 9 box", "Dx", "Dy"]):
+        panel = image if name == "original" else results[name]
+        if name in ("dx", "dy"):
+            ax.imshow(panel, cmap="RdBu_r", vmin=-limit, vmax=limit)
+            plt.imsave(out / f"{name}.png", panel, cmap="RdBu_r", vmin=-limit, vmax=limit)
+        else:
+            ax.imshow(panel, cmap="gray", vmin=0, vmax=1)
+        ax.set_title(title)
+        ax.axis("off")
+    fig.tight_layout()
+    fig.savefig(out / "overview.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    (out / "timings.csv").write_text("\n".join(rows) + "\n")
+    (out / "parameters.txt").write_text(
+        f"image: {image_path}\noriginal shape: {original_shape}\nworking shape: {image.shape}\n"
+        "resized to at most 512 pixels on the long side for loop timings\n"
+        "box: 9 x 9, each entry 1/81\nDx: [1, -1]\nDy: [[1], [-1]]\n"
+        "mode: same; boundary: zero padding; kernels flipped\n"
+        "even kernels: extra padding on top/left to match SciPy\n"
+        "timings: one run per method on the same image, including padding\n"
+        "derivative display: shared 99th percentile range, excluding the border\n"
+    )
+    print(f"saved convolution results to {out}")
 
 
 def run_edges(image_path, threshold=0.2):
@@ -314,7 +377,7 @@ if __name__ == "__main__":
     parser.add_argument("--image", type=Path)
     parser.add_argument("--extra-image", type=Path, default=ROOT / "data" / "cameraman.png")
     parser.add_argument("--threshold", type=float, default=0.2)
-    parser.add_argument("--part", choices=["edges", "dog", "sharpen", "hybrid", "stacks", "blend", "all"], default="all")
+    parser.add_argument("--part", choices=["convolution", "edges", "dog", "sharpen", "hybrid", "stacks", "blend", "all"], default="all")
     parser.add_argument("--sigma", type=float, default=2.0)
     parser.add_argument("--size", type=int)
     parser.add_argument("--dog-threshold", type=float, default=0.04)
@@ -337,6 +400,8 @@ if __name__ == "__main__":
     if args.part in ("hybrid", "all") and (args.low_image or args.high_image):
         if not (args.low_image and args.high_image and args.points):
             parser.error("custom hybrids need --low-image, --high-image, and --points")
+    if args.part in ("convolution", "all"):
+        run_convolution(args.image or ROOT / "data" / "post-exam2025.jpeg")
     if args.part in ("edges", "all"):
         run_edges(args.image or ROOT / "data" / "cameraman.png", args.threshold)
     if args.part in ("dog", "all"):

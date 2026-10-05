@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Project 2</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="page">
+        <header class="site-header">
+            <h1>Project 2: Fun with Filters and Frequencies</h1>
+            <p class="subtitle">Tim Nguyen</p>
+        </header>
+        <nav class="nav">
+            <a href="#overview">Overview</a>
+            <a href="#convolution">Convolution</a>
+            <a href="#edges">Edges</a>
+            <a href="#dog">DoG</a>
+            <a href="#sharpening">Sharpening</a>
+            <a href="#hybrids">Hybrids</a>
+            <a href="#stacks">Stacks</a>
+            <a href="#blending">Blending</a>
+            <a href="#learned">What I learned</a>
+            <a href="../index.html">&larr; Portfolio</a>
+        </nav>
+        <main class="content">
+            <section id="overview">
+                <h2>Overview</h2>
+                <p>For this project, I implemented convolution with NumPy and used it to find
+                edges, sharpen images, and make hybrid images and multiresolution blends. Some of
+                the filtering code comes from project 1, where I used it to improve alignment.
+                Here I wanted to see how the choice of filter changes the image itself.</p>
+                <p>All images are normalized to floats between 0 and 1. I leave the filter
+                outputs unclipped during computation, since the high-pass and Laplacian images
+                contain negative values. The results are clipped for display, and the signed
+                images are scaled so both sides of zero are visible.</p>
+            </section>
+
+            <section id="convolution">
+                <h2>Part 1.1: Convolution from scratch</h2>
+                <p>I implemented convolution twice. The first version uses four loops, two
+                over the image and two over the kernel. The second uses two loops over the image
+                and computes each patch's product and sum with NumPy. Essentially, both calculate
+                the same weighted sum, but the second moves the inner work out of Python. The
+                kernel is flipped and the image is zero-padded to preserve its dimensions.</p>
+                <figure class="code"><figcaption>p2/filters.py</figcaption><pre><code>def convolve_four_loops(image: np.ndarray, kernel: np.ndarray) -&gt; np.ndarray:
+    padded, kernel, out = _prepare_convolution(image, kernel)
+    kh, kw = kernel.shape
+    for i in range(out.shape[0]):
+        for j in range(out.shape[1]):
+            for m in range(kh):
+                for n in range(kw):
+                    out[i, j] += padded[i + m, j + n] * kernel[m, n]
+    return out
+
+def convolve_two_loops(image: np.ndarray, kernel: np.ndarray) -&gt; np.ndarray:
+    padded, kernel, out = _prepare_convolution(image, kernel)
+    kh, kw = kernel.shape
+    for i in range(out.shape[0]):
+        for j in range(out.shape[1]):
+            out[i, j] = np.sum(padded[i:i + kh, j:j + kw] * kernel)
+    return out</code></pre></figure>
+                <p>Getting the padding to agree with SciPy took a little care for even-sized
+                kernels, including <code>Dx = [1, -1]</code> and its transpose. The extra pixel goes
+                on the top or left. With that convention, both versions match SciPy using
+                <code>mode="same", boundary="fill", fillvalue=0</code>.</p>
+                <figure class="code"><figcaption>p2/filters.py</figcaption><pre><code>def _prepare_convolution(image: np.ndarray, kernel: np.ndarray):
+    image = np.asarray(image, dtype=np.float64)
+    kernel = np.asarray(kernel, dtype=np.float64)
+    if image.ndim != 2 or kernel.ndim != 2:
+        raise ValueError(&quot;Image and kernel must be 2-D&quot;)
+    if min(image.shape) == 0 or min(kernel.shape) == 0:
+        raise ValueError(&quot;Image and kernel must be nonempty&quot;)
+
+    kh, kw = kernel.shape
+    # extra pad on top/left for even kernels
+    padding = ((kh // 2, (kh - 1) // 2), (kw // 2, (kw - 1) // 2))
+    padded = np.pad(image, padding, mode=&quot;constant&quot;)
+    return padded, np.flip(kernel, axis=(0, 1)), np.zeros_like(image)</code></pre></figure>
+                <p>I used my post-exam photo, converted to grayscale and resized to 512 pixels
+                on the long side to keep the four-loop run manageable. The box filter is
+                <code>np.ones((9, 9)) / 81</code>, which averages the 81 pixels in each neighborhood.
+                You can see it soften the hair and lights. Dx and Dy pick up changes across
+                columns and rows instead.</p>
+                <figure class="wide"><a href="resources/p1_1/post-exam2025/overview.png"><img src="resources/p1_1/post-exam2025/overview.png" alt="Post-exam photo: grayscale original, 9 x 9 box blur, Dx, and Dy. Derivatives use a shared interior contrast range." loading="lazy"></a><figcaption>Post-exam photo: grayscale original, 9 x 9 box blur, Dx, and Dy. Derivatives use a shared interior contrast range.</figcaption></figure>
+                <p>The derivative plots use blue for negative values, white for zero, and red
+                for positive values. At first they looked almost all white. The zero padding
+                creates a strong edge at the border, and using that maximum for the color scale
+                made everything else too faint. I switched to the 99th percentile of the absolute
+                interior values, using the same range for Dx and Dy. The underlying derivatives
+                stay the same.</p>
+                <table class="timings"><caption>Seconds per convolution on the resized grayscale photo</caption><thead><tr><th>Filter</th><th>Four loops</th><th>Two loops</th><th>SciPy</th><th>Largest error</th></tr></thead><tbody><tr><td>box</td><td>7.073533</td><td>0.566898</td><td>0.038641</td><td>9.992e-16</td></tr><tr><td>dx</td><td>0.175834</td><td>0.461898</td><td>0.002611</td><td>0.000e+00</td></tr><tr><td>dy</td><td>0.184638</td><td>0.481571</td><td>0.003064</td><td>0.000e+00</td></tr></tbody></table>
+                <p>Below are the runtimes for one run of each method on the same resized image,
+                including padding. Both implementations agree with SciPy to floating-point
+                precision. For the box filter, removing the inner Python loops makes a substantial
+                difference. However, for Dx and Dy the two-loop version is slower: these kernels
+                only have two entries, so the NumPy reduction at every pixel adds overhead without
+                saving much work. SciPy is faster than both implementations in all three cases.</p>
+                <p>Zero padding also darkens the blurred image at its border because some of the
+                neighbors being averaged are zero. For the rest of the project I use symmetric
+                boundaries, which reflect the image instead of introducing that black border.</p>
+            </section>
+
+            <section id="edges">
+                <h2>Part 1.2: Finite difference operator</h2>
+                <p>On Cameraman I convolve with <code>[1, -1]</code> in x and its transpose in y.
+                The gradient magnitude is <code>sqrt(ix**2 + iy**2)</code>, so a strong change in
+                either direction gives a bright pixel. Thresholding that magnitude gives the
+                binary edge image.</p>
+                <figure class="wide"><a href="resources/p1_2/overview.png"><img src="resources/p1_2/overview.png" alt="Cameraman: original, x and y derivatives, gradient magnitude, and edges at threshold 0.2." loading="lazy"></a><figcaption>Cameraman: original, x and y derivatives, gradient magnitude, and edges at threshold 0.2.</figcaption></figure>
+                <figure class="wide"><a href="resources/p1_2/thresholds.png"><img src="resources/p1_2/thresholds.png" alt="The same gradient magnitude thresholded at 0.05, 0.1, and 0.2." loading="lazy"></a><figcaption>The same gradient magnitude thresholded at 0.05, 0.1, and 0.2.</figcaption></figure>
+                <p>I used a threshold of 0.2. At 0.05, much of the ground texture is detected
+                as edges. Increasing the threshold removes that noise while preserving the
+                person's outline, camera, and tripod. Some weaker building edges are lost, but
+                I think the cleaner foreground is a better result for this image.</p>
+            </section>
+
+            <section id="dog">
+                <h2>Part 1.3: Derivative of Gaussian</h2>
+                <p>The finite differences also detect small variations in the ground. To
+                reduce this, I blur Cameraman with a Gaussian before computing the derivatives.
+                The kernel is the outer product of a 1D Gaussian from
+                <code>cv2.getGaussianKernel</code>, using &sigma; = 2 and a 13&times;13 kernel.
+                The ground is much less noisy after smoothing, though the edges become wider
+                and have a lower peak magnitude.</p>
+                <figure class="wide"><a href="resources/p1_3/filters.png"><img src="resources/p1_3/filters.png" alt="Gaussian, DoG in x, and DoG in y. Signed filters use blue and red for opposite signs." loading="lazy"></a><figcaption>Gaussian, DoG in x, and DoG in y. Signed filters use blue and red for opposite signs.</figcaption></figure>
+                <p>I then combined the blur and derivative into one filter per direction by
+                convolving the Gaussian with Dx and Dy. I use full convolution when building
+                these kernels so none of their entries get cut off. Each has a positive side and
+                a negative side, so constant brightness cancels and changes in brightness remain.</p>
+                <figure class="wide"><a href="resources/p1_3/magnitude_comparison.png"><img src="resources/p1_3/magnitude_comparison.png" alt="Gradient magnitudes: raw differences, blur then difference, and DoG." loading="lazy"></a><figcaption>Gradient magnitudes: raw differences, blur then difference, and DoG.</figcaption></figure>
+                <figure class="wide"><a href="resources/p1_3/edge_comparison.png"><img src="resources/p1_3/edge_comparison.png" alt="Binary edges: threshold 0.2 for raw differences, 0.04 for both smoothed methods." loading="lazy"></a><figcaption>Binary edges: threshold 0.2 for raw differences, 0.04 for both smoothed methods.</figcaption></figure>
+                <p>With smoothing, I lowered the edge threshold to 0.04 to account for the
+                reduced response. The two methods produce the same result, with a maximum
+                difference of 9.515&times;10<sup>&minus;16</sup>, including the boundary for these
+                settings. Since convolution is associative, convolving the Gaussian and derivative
+                kernels first is equivalent to applying them sequentially.</p>
+            </section>
+
+            <section id="sharpening">
+                <h2>Part 2.1: Image sharpening</h2>
+                <p>To sharpen an image I blur it, subtract that blur from the original, and add
+                some of the difference back. The difference holds the detail that the blur removed,
+                so adding it makes the edges stronger. I use
+                <code>image + alpha * (image - blur)</code> with &sigma; = 2. Rearranging it gives
+                the single convolution kernel <code>(1 + alpha) * delta - alpha * G</code>, where
+                delta is zero except for a 1 at the center.</p>
+                <figure class="code"><figcaption>p2/frequencies.py</figcaption><pre><code>def unsharp_mask(image, sigma=2.0, size=None, alpha=1.0, boundary=&quot;symm&quot;):
+    image = np.asarray(image, dtype=np.float64)
+    low = gaussian_blur(image, sigma, size, boundary)
+    high = image - low
+    return low, high, image + alpha * high
+
+def unsharp_kernel(sigma=2.0, size=None, alpha=1.0):
+    gaussian = gaussian_kernel(sigma, size)
+    impulse = np.zeros_like(gaussian)
+    impulse[gaussian.shape[0] // 2, gaussian.shape[1] // 2] = 1
+    return (1 + alpha) * impulse - alpha * gaussian</code></pre></figure>
+                <figure class="wide"><a href="resources/p2_1/taj/overview.png"><img src="resources/p2_1/taj/overview.png" alt="Taj: original, Gaussian blur, scaled high frequencies, and sharpening with alpha 1." loading="lazy"></a><figcaption>Taj: original, Gaussian blur, scaled high frequencies, and sharpening with alpha 1.</figcaption></figure>
+                <figure class="wide"><a href="resources/p2_1/cameraman/overview.png"><img src="resources/p2_1/cameraman/overview.png" alt="Cameraman through the same sharpening process." loading="lazy"></a><figcaption>Cameraman through the same sharpening process.</figcaption></figure>
+                <p>The smaller details on Taj become easier to see after sharpening. Cameraman
+                also gets sharper, but so does all the ground texture. I checked the single-kernel
+                version against the blur, subtract, and add version; the largest difference across
+                the two images was under 1.8&times;10<sup>&minus;15</sup>.</p>
+                <figure class="wide"><a href="resources/p2_1/taj/alpha_comparison.png"><img src="resources/p2_1/taj/alpha_comparison.png" alt="Taj with alpha 0.5, 1, and 2, alongside the original." loading="lazy"></a><figcaption>Taj with alpha 0.5, 1, and 2, alongside the original.</figcaption></figure>
+                <figure class="wide"><a href="resources/p2_1/cameraman/alpha_comparison.png"><img src="resources/p2_1/cameraman/alpha_comparison.png" alt="Cameraman with the same alpha sweep." loading="lazy"></a><figcaption>Cameraman with the same alpha sweep.</figcaption></figure>
+                <p>Below are results with &alpha; = 0.5, 1, and 2, all using the same blur.
+                The change at 0.5 is relatively small. At 1 the details are clearer, which I
+                preferred for these images. Increasing it to 2 strengthens the outlines further,
+                but also makes halos and texture more noticeable.</p>
+                <figure class="wide"><a href="resources/p2_1/taj/blur_then_sharpen.png"><img src="resources/p2_1/taj/blur_then_sharpen.png" alt="Taj: original, blurred, and blurred then sharpened." loading="lazy"></a><figcaption>Taj: original, blurred, and blurred then sharpened.</figcaption></figure>
+                <figure class="wide"><a href="resources/p2_1/cameraman/blur_then_sharpen.png"><img src="resources/p2_1/cameraman/blur_then_sharpen.png" alt="Cameraman: original, blurred, and blurred then sharpened." loading="lazy"></a><figcaption>Cameraman: original, blurred, and blurred then sharpened.</figcaption></figure>
+                <p>For evaluation, I blurred each image and sharpened the blurred version.
+                This improves contrast, but doesn't restore all of the original detail. The mean
+                squared error on Taj decreases from 0.004640 to 0.003545, and on Cameraman from
+                0.003455 to 0.002566. The sharpened versions are closer to the originals, though
+                sharpening can only amplify the detail that remains after blurring.</p>
+            </section>
+
+            <section id="hybrids">
+                <h2>Part 2.2: Hybrid images</h2>
+                <p>To create a hybrid, I add the low frequencies of one image to the high
+                frequencies of another. I use a Gaussian blur for the low pass and
+                <code>image - gaussian_blur(image)</code> for the high pass. The high-frequency
+                image is easier to see close up, while the low-frequency image becomes more
+                visible from farther away as the fine detail becomes harder to resolve.</p>
+                <figure class="code"><figcaption>p2/frequencies.py</figcaption><pre><code>def hybrid_image(image_a, image_b, sigma_low=8.0, sigma_high=4.0):
+    if image_a.shape != image_b.shape:
+        raise ValueError(&quot;Align and crop the images first&quot;)
+    low = gaussian_blur(image_a, sigma_low)
+    high = image_b - gaussian_blur(image_b, sigma_high)
+    return low, high, low + high</code></pre></figure>
+                <p>I used the course alignment code with two matching points in each image to
+                recenter, rescale, and rotate the pair, then cropped them to a shared region. The
+                sigmas below are measured in pixels after alignment, so image size matters. A
+                larger low-pass sigma removes more detail from the first image; a larger
+                high-pass sigma keeps more of the second image's broader features.</p>
+
+                <h3>Derek and Nutmeg</h3>
+                <figure class="wide"><a href="resources/p2_2/nutmeg_DerekPicture/originals.png"><img src="resources/p2_2/nutmeg_DerekPicture/originals.png" alt="Original Nutmeg and Derek inputs." loading="lazy"></a><figcaption>Original Nutmeg and Derek inputs.</figcaption></figure>
+                <figure class="wide"><a href="resources/p2_2/nutmeg_DerekPicture/aligned.png"><img src="resources/p2_2/nutmeg_DerekPicture/aligned.png" alt="Grayscale inputs aligned at the eyes and cropped to a shared region." loading="lazy"></a><figcaption>Grayscale inputs aligned at the eyes and cropped to a shared region.</figcaption></figure>
+                <div class="compare"><figure class=""><a href="resources/p2_2/nutmeg_DerekPicture/hybrid.png"><img src="resources/p2_2/nutmeg_DerekPicture/hybrid.png" alt="Derek close up, Nutmeg far away. Low sigma 8, high sigma 4." loading="lazy"></a><figcaption>Derek close up, Nutmeg far away. Low sigma 8, high sigma 4.</figcaption></figure><figure class=""><a href="resources/p2_2/DerekPicture_nutmeg/hybrid.png"><img src="resources/p2_2/DerekPicture_nutmeg/hybrid.png" alt="Reversed: Nutmeg close up, Derek far away. Low sigma 8, high sigma 20." loading="lazy"></a><figcaption>Reversed: Nutmeg close up, Derek far away. Low sigma 8, high sigma 20.</figcaption></figure></div>
+                <p>The first result uses Nutmeg for the low frequencies (&sigma; = 8) and
+                Derek for the high frequencies (&sigma; = 4), aligned at the eyes. I also made
+                the reversed version, with Nutmeg visible close up. For that version I increased
+                the high-pass sigma from 4 to 6, then 10, and finally 20. This makes the cat
+                stronger, but also lets enough broad structure through that it remains visible
+                farther away. The final reversed result is less effective at switching to Derek.</p>
+
+                <h3>Moon and mooncake: the full process</h3>
+                <figure class="wide"><a href="resources/p2_2/moon_mooncake/originals.png"><img src="resources/p2_2/moon_mooncake/originals.png" alt="Original moon and mooncake photos." loading="lazy"></a><figcaption>Original moon and mooncake photos.</figcaption></figure>
+                <figure class="wide"><a href="resources/p2_2/moon_mooncake/aligned.png"><img src="resources/p2_2/moon_mooncake/aligned.png" alt="Prepared grayscale moon and mooncake, matched in size and position." loading="lazy"></a><figcaption>Prepared grayscale moon and mooncake, matched in size and position.</figcaption></figure>
+                <p>I matched the moon and mooncake at their centers and resized them to roughly
+                the same radius on a 640&times;640 canvas. The cake was photographed at an angle,
+                so its horizontal and vertical scales are adjusted separately. I also faded out
+                the surrounding tray before filtering, since its edges were distracting from
+                the round shape I wanted to match.</p>
+                <figure class="wide"><a href="resources/p2_2/moon_mooncake/process.png"><img src="resources/p2_2/moon_mooncake/process.png" alt="Low-pass moon (sigma 10), scaled high-pass mooncake (sigma 5), and their sum." loading="lazy"></a><figcaption>Low-pass moon (sigma 10), scaled high-pass mooncake (sigma 5), and their sum.</figcaption></figure>
+                <p>For this pair, the moon is low-pass filtered with &sigma; = 10 and the
+                mooncake is high-pass filtered with &sigma; = 5. The cake's surface pattern gives
+                the close-up view distinct detail, while the moon provides the broad light and
+                dark regions. The cuts and outer shape of the cake don't fully match the moon,
+                so those differences remain visible in the result.</p>
+                <figure class="wide"><a href="resources/p2_2/moon_mooncake/fourier.png"><img src="resources/p2_2/moon_mooncake/fourier.png" alt="Log Fourier magnitudes: aligned moon, aligned mooncake, low-pass moon, high-pass mooncake, and hybrid." loading="lazy"></a><figcaption>Log Fourier magnitudes: aligned moon, aligned mooncake, low-pass moon, high-pass mooncake, and hybrid.</figcaption></figure>
+                <p>For the frequency plots I use
+                <code>log(abs(fftshift(fft2(image))) + 1e-8)</code>, with the same display range for
+                all five. Low frequencies are at the center. After blurring the moon, most of the
+                visible energy is concentrated there. Subtracting the cake's blur weakens its
+                center and leaves the detail farther out. Both appear in the hybrid's spectrum.</p>
+                <div class="compare"><figure class=""><a href="resources/p2_2/moon_mooncake/hybrid.png"><img src="resources/p2_2/moon_mooncake/hybrid.png" alt="Larger view: mooncake surface detail." loading="lazy"></a><figcaption>Larger view: mooncake surface detail.</figcaption></figure><figure class="far"><a href="resources/p2_2/moon_mooncake/hybrid.png"><img src="resources/p2_2/moon_mooncake/hybrid.png" alt="Small view: broad moon shading." loading="lazy"></a><figcaption>Small view: broad moon shading.</figcaption></figure></div>
+
+                <h3>Lickitung and Emitung</h3>
+                <figure class="wide"><a href="resources/p2_2/lickitung_emitung/originals.png"><img src="resources/p2_2/lickitung_emitung/originals.png" alt="Original Lickitung and Emitung photos." loading="lazy"></a><figcaption>Original Lickitung and Emitung photos.</figcaption></figure>
+                <div class="compare"><figure class=""><a href="resources/p2_2/lickitung_emitung/hybrid.png"><img src="resources/p2_2/lickitung_emitung/hybrid.png" alt="Larger view: Emitung detail, with Lickitung color." loading="lazy"></a><figcaption>Larger view: Emitung detail, with Lickitung color.</figcaption></figure><figure class="far"><a href="resources/p2_2/lickitung_emitung/hybrid.png"><img src="resources/p2_2/lickitung_emitung/hybrid.png" alt="Small view: Lickitung in the overlap; Emitung surroundings retained." loading="lazy"></a><figcaption>Small view: Lickitung in the overlap; Emitung surroundings retained.</figcaption></figure></div>
+                <p>Lickitung is the low-pass image (&sigma; = 8) and Emitung is the high-pass image
+                (&sigma; = 4), aligned at the eyes. I tried grayscale, then color on Lickitung
+                alone, then color on both. I kept both in color, applying the filters separately
+                to each RGB channel, so the broad pink tongue comes from Lickitung and the fine
+                facial detail comes from Emitung.</p>
+                <p>The black background around Lickitung originally created a large dark
+                area in the hybrid. I tried masking both inputs onto gray, but that also removed
+                Emitung's surroundings. The final version masks only Lickitung, preserving Emitung
+                outside the overlap and using the hybrid inside it. This limits the frequency
+                mixture to the masked region. The different face outlines and tongue lengths
+                still affect the result, and the preserved surroundings make the far-away change
+                less complete than in the other pairs.</p>
+            </section>
+
+            <section id="stacks">
+                <h2>Part 2.3: Gaussian and Laplacian stacks</h2>
+                <p>In project 1 I blurred and downsampled to build a pyramid. Here every level
+                keeps the original dimensions. I start with the image and repeatedly blur the
+                previous level, doubling the filter sigma each time: 2, 4, 8, 16, and 32.</p>
+                <figure class="code"><figcaption>p2/stacks.py</figcaption><pre><code>def gaussian_stack(image, num_bands=5, sigma=2.0):
+    stack = [np.asarray(image, dtype=np.float64)]
+    for i in range(num_bands):
+        stack.append(gaussian_blur(stack[-1], sigma * 2**i))
+    return stack
+
+def laplacian_stack(gaussian):
+    stack = [gaussian[i] - gaussian[i + 1] for i in range(len(gaussian) - 1)]
+    stack.append(gaussian[-1])
+    return stack</code></pre></figure>
+                <figure class="wide"><a href="resources/p2_3/apple/gaussian.png"><img src="resources/p2_3/apple/gaussian.png" alt="Apple Gaussian stack: original followed by five successively blurred levels." loading="lazy"></a><figcaption>Apple Gaussian stack: original followed by five successively blurred levels.</figcaption></figure>
+                <figure class="wide"><a href="resources/p2_3/orange/gaussian.png"><img src="resources/p2_3/orange/gaussian.png" alt="Orange Gaussian stack with the same filter sigmas." loading="lazy"></a><figcaption>Orange Gaussian stack with the same filter sigmas.</figcaption></figure>
+                <p>For the Laplacian stack I subtract each Gaussian level from the one before
+                it. The first bands contain finer detail, and the later bands contain broader
+                changes. I keep the last Gaussian as the residual. Adding the five difference
+                bands and that residual gives the original image back, with an error of about
+                1.1&times;10<sup>&minus;16</sup> for both apple and orange.</p>
+                <figure class="wide"><a href="resources/p2_3/apple/laplacian.png"><img src="resources/p2_3/apple/laplacian.png" alt="Apple: five scaled Laplacian bands and the coarse Gaussian residual." loading="lazy"></a><figcaption>Apple: five scaled Laplacian bands and the coarse Gaussian residual.</figcaption></figure>
+                <figure class="wide"><a href="resources/p2_3/orange/laplacian.png"><img src="resources/p2_3/orange/laplacian.png" alt="Orange: five scaled Laplacian bands and the coarse Gaussian residual." loading="lazy"></a><figcaption>Orange: five scaled Laplacian bands and the coarse Gaussian residual.</figcaption></figure>
+                <p>The difference bands above are signed and scaled individually for display,
+                with zero at middle gray. The last panel is the actual coarse residual.</p>
+            </section>
+
+            <section id="blending">
+                <h2>Part 2.4: Multiresolution blending</h2>
+                <p>Using a hard mask gives a very obvious seam. To soften it at different
+                scales, I make a Gaussian stack of the mask and use each level to weight the
+                matching Laplacian bands: <code>M[i] * LA[i] + (1 - M[i]) * LB[i]</code>. Then I
+                add the bands and residual. The coarser mask levels are more blurred, so color
+                and shading change gradually while the fine texture stays more local.</p>
+                <figure class="code"><figcaption>p2/blend.py</figcaption><pre><code>def multiresolution_blend(image_a, image_b, mask, num_bands=5, sigma=2.0):
+    if image_a.shape != image_b.shape or mask.shape != image_a.shape[:2]:
+        raise ValueError(&quot;Images and mask need matching sizes&quot;)
+    la = laplacian_stack(gaussian_stack(image_a, num_bands, sigma))
+    lb = laplacian_stack(gaussian_stack(image_b, num_bands, sigma))
+    masks = gaussian_stack(mask, num_bands, sigma)
+    parts_a, parts_b = [], []
+    for a, b, m in zip(la, lb, masks):
+        if a.ndim == 3:
+            m = m[..., None]
+        parts_a.append(m * a)
+        parts_b.append((1 - m) * b)
+    result = np.sum(parts_a, axis=0) + np.sum(parts_b, axis=0)
+    return result, parts_a, parts_b, masks</code></pre></figure>
+                <figure class="wide"><a href="resources/p2_4/apple_orange/inputs.png"><img src="resources/p2_4/apple_orange/inputs.png" alt="Apple, orange, and the left-half mask." loading="lazy"></a><figcaption>Apple, orange, and the left-half mask.</figcaption></figure>
+                <figure class="wide"><a href="resources/p2_4/apple_orange/comparison.png"><img src="resources/p2_4/apple_orange/comparison.png" alt="Direct mask blend on the left; multiresolution blend on the right." loading="lazy"></a><figcaption>Direct mask blend on the left; multiresolution blend on the right.</figcaption></figure>
+                <p>For the oraple the mask is 1 on the left and 0 on the right. The direct blend
+                has a clear seam; the stack blend makes the color transition smoother while
+                keeping texture on both sides. It uses five difference bands, a residual, and
+                Gaussian filter sigmas of 2, 4, 8, 16, and 32 for the images and mask.</p>
+                <figure class="wide bands"><a href="resources/p2_4/apple_orange/figure_3_42.png"><img src="resources/p2_4/apple_orange/figure_3_42.png" alt="Figure 3.42 layout: weighted inputs and sums at levels 0, 2, and 4, followed by full contributions and the final oraple." loading="lazy"></a><figcaption>Figure 3.42 layout: weighted inputs and sums at levels 0, 2, and 4, followed by full contributions and the final oraple.</figcaption></figure>
+                <p>This recreates the layout of Figure 3.42 (a)&ndash;(l). The first three rows
+                show masked apple, masked orange, and their sum at levels 0, 2, and 4. Each row
+                shares a signed display scale. The bottom row shows the summed contribution from
+                each image and the final blend, including the coarse residual.</p>
+
+                <h3>Moon and eye</h3>
+                <figure class="wide"><a href="resources/p2_4/moon_eye/originals.png"><img src="resources/p2_4/moon_eye/originals.png" alt="Original eye and moon photos." loading="lazy"></a><figcaption>Original eye and moon photos.</figcaption></figure>
+                <figure class="wide"><a href="resources/p2_4/moon_eye/inputs.png"><img src="resources/p2_4/moon_eye/inputs.png" alt="Aligned, color-mapped moon; eye; and irregular iris mask." loading="lazy"></a><figcaption>Aligned, color-mapped moon; eye; and irregular iris mask.</figcaption></figure>
+                <figure class="wide"><a href="resources/p2_4/moon_eye/comparison.png"><img src="resources/p2_4/moon_eye/comparison.png" alt="Direct mask blend and multiresolution moon/eye blend." loading="lazy"></a><figcaption>Direct mask blend and multiresolution moon/eye blend.</figcaption></figure>
+                <p>The moon is resized and positioned over the iris. I use a circular mask
+                clipped to the eye opening, with an 8-pixel inward feather, and reduce its weight
+                around the pupil and reflection to preserve those features. The Gaussian filter
+                sigmas for the stack are 2, 4, 8, 16, and 32.</p>
+                <p>The first version looked like an overlay, largely because the moon was
+                brighter than the iris and had blue and yellow tones. I converted it to grayscale,
+                applied gamma 1.8, and mapped its texture to the iris color with some of the eye's
+                local shading. This initially made the moon too weak. Increasing the texture
+                strength to 0.055 and the brightness offset to 0.07 made it more visible while
+                keeping it closer to the eye's appearance.</p>
+
+                <h3>Basil plant and matcha</h3>
+                <figure class="wide"><a href="resources/p2_4/basil_plant_matcha/originals.png"><img src="resources/p2_4/basil_plant_matcha/originals.png" alt="Original basil plant and matcha2 photos." loading="lazy"></a><figcaption>Original basil plant and matcha2 photos.</figcaption></figure>
+                <figure class="wide"><a href="resources/p2_4/basil_plant_matcha/inputs.png"><img src="resources/p2_4/basil_plant_matcha/inputs.png" alt="Prepared basil plant, positioned matcha cup, and the irregular leaf/stem mask." loading="lazy"></a><figcaption>Prepared basil plant, positioned matcha cup, and the irregular leaf/stem mask.</figcaption></figure>
+                <div class="compare"><figure class=""><a href="resources/p2_4/basil_plant_matcha/blend.png"><img src="resources/p2_4/basil_plant_matcha/blend.png" alt="Final basil plant/matcha blend." loading="lazy"></a><figcaption>Final basil plant/matcha blend.</figcaption></figure><figure class=""><a href="resources/p2_4/basil_plant_matcha/figure_3_42.png"><img src="resources/p2_4/basil_plant_matcha/figure_3_42.png" alt="Masked contributions at levels 0, 2, and 4, plus their full sums." loading="lazy"></a><figcaption>Masked contributions at levels 0, 2, and 4, plus their full sums.</figcaption></figure></div>
+                <p>For the basil plant and matcha, I resize and position the drink so the lid
+                sits beneath the stems. The mask selects green leaves and stems within a
+                hand-drawn outline, removes small isolated patches, and softens the edges. It
+                excludes the pot and most of the plant's room background. I also extend and blur
+                the upper background of the drink photo to make room for the plant.</p>
+                <p>I replaced the first drink photo with matcha2 because its greener top matches
+                the basil leaves better. The plant uses gamma 1.15, and the Gaussian filter sigmas
+                are 1, 2, 4, 8, and 16. Some dark fringes from the source background remain around
+                the leaves. A more accurate mask would improve these edges, since the stack can
+                smooth the transition but cannot remove background pixels included in the mask.</p>
+            </section>
+
+            <section id="learned">
+                <h2>What I learned</h2>
+                <p>The input preparation had a larger effect on the results than I initially
+                expected. Alignment at the eyes and centers helped the hybrids, while matching
+                brightness and color helped the blends. The moon and eye showed this particularly
+                clearly: smoothing the seam wasn't enough while the moon was still much brighter
+                and a different color from the iris.</p>
+                <p>Increasing the high-pass sigma also has a tradeoff. Nutmeg became clearer
+                close up, but the broader features that passed through made the cat visible
+                farther away too. Choosing the filter settings means judging both views, since
+                improving one can make the other less distinct.</p>
+                <p>The main remaining issues are in the custom masks and the shapes of the
+                inputs. Some room background survives around the basil leaves, and Lickitung and
+                Emitung have different silhouettes even with the eyes aligned. Improving the
+                foreground masks would help, though the shape differences would still remain.</p>
+                <p>The darker eye photo also made the moon blend harder to balance. Matching the
+                dark iris meant reducing the moon's brightness with gamma and color adjustments,
+                but that also made its texture harder to see. Leaving it brighter preserved the
+                detail but made it look pasted on, so the final settings are a compromise between
+                keeping the moon visible and matching the eye.</p>
+            </section>
+        </main>
+    </div>
+</body>
+</html>
