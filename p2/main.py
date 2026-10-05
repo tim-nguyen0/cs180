@@ -11,6 +11,7 @@ from edges import finite_difference, dog_filters, derivative_of_gaussian
 from filters import gaussian_blur, gaussian_kernel, filter_image
 from frequencies import unsharp_mask, unsharp_kernel, hybrid_image, fourier_magnitude
 from alignment import align_images
+from stacks import gaussian_stack, laplacian_stack
 from utils import load_image, save_grid
 
 
@@ -214,12 +215,36 @@ def run_hybrid(path_a, path_b, points, crop, sigma_low=8.0, sigma_high=4.0):
     print(f"saved hybrid results to {out}")
 
 
+def run_stacks(image_path, num_bands=5, sigma=2.0):
+    image = load_image(image_path)
+    gaussian = gaussian_stack(image, num_bands, sigma)
+    laplacian = laplacian_stack(gaussian)
+    out = ROOT / "out" / "p2_3" / image_path.stem
+    out.mkdir(parents=True, exist_ok=True)
+
+    save_grid(gaussian, [f"G{i}" for i in range(len(gaussian))], out / "gaussian.png")
+    # scale bands for display, keep the actual values signed
+    bands = [0.5 + band / (2 * max(np.max(np.abs(band)), 1e-8)) for band in laplacian[:-1]]
+    save_grid(bands + [laplacian[-1]],
+              [f"L{i} (scaled)" for i in range(num_bands)] + ["residual"],
+              out / "laplacian.png")
+    reconstructed = np.sum(laplacian, axis=0)
+    error = np.max(np.abs(reconstructed - image))
+    save_grid([image, reconstructed], ["original", "reconstructed"], out / "reconstruction.png")
+    (out / "parameters.txt").write_text(
+        f"image: {image_path}\nnum bands: {num_bands}\n"
+        f"blur sigmas: {[sigma * 2**i for i in range(num_bands)]}\nboundary: symm\n"
+        f"reconstruction max error: {error:.3e}\n"
+    )
+    print(f"saved stacks to {out}; reconstruction error {error:.3e}")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--image", type=Path)
     parser.add_argument("--extra-image", type=Path, default=ROOT / "data" / "cameraman.png")
     parser.add_argument("--threshold", type=float, default=0.2)
-    parser.add_argument("--part", choices=["edges", "dog", "sharpen", "hybrid", "all"], default="all")
+    parser.add_argument("--part", choices=["edges", "dog", "sharpen", "hybrid", "stacks", "all"], default="all")
     parser.add_argument("--sigma", type=float, default=2.0)
     parser.add_argument("--size", type=int)
     parser.add_argument("--dog-threshold", type=float, default=0.04)
@@ -230,6 +255,7 @@ if __name__ == "__main__":
     parser.add_argument("--crop", type=int, nargs=4, metavar="BOUND")
     parser.add_argument("--sigma-low", type=float, default=8.0)
     parser.add_argument("--sigma-high", type=float, default=4.0)
+    parser.add_argument("--num-bands", type=int, default=5)
     args = parser.parse_args()
     if args.part in ("hybrid", "all") and (args.low_image or args.high_image):
         if not (args.low_image and args.high_image and args.points):
@@ -248,3 +274,14 @@ if __name__ == "__main__":
         run_hybrid(args.low_image or ROOT / "starter" / "nutmeg.jpg",
                    args.high_image or ROOT / "starter" / "DerekPicture.jpg",
                    points, crop, args.sigma_low, args.sigma_high)
+    if args.part in ("stacks", "all"):
+        if args.image:
+            run_stacks(args.image, args.num_bands, args.sigma)
+        else:
+            paths = [ROOT / "starter" / "apple.jpeg", ROOT / "starter" / "orange.jpeg"]
+            if all(path.exists() for path in paths):
+                for path in paths:
+                    run_stacks(path, args.num_bands, args.sigma)
+            else:
+                run_stacks(ROOT / "data" / "taj.jpg", args.num_bands, args.sigma)
+                print("apple/orange inputs still needed for the course figures")

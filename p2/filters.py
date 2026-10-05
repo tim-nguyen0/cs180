@@ -61,7 +61,8 @@ def filter_image(image, kernel, boundary="symm"):
 
 
 def gaussian_blur(image, sigma=2.0, size=None, boundary="symm"):
-    return filter_image(image, gaussian_kernel(sigma, size), boundary)
+    g = gaussian_kernel(sigma, size).sum(axis=0)
+    return filter_image(filter_image(image, g[None, :], boundary), g[:, None], boundary)
 
 
 def gaussian_blur_5(image: np.ndarray, *, boundary: str = "symm") -> np.ndarray:
