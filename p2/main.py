@@ -12,6 +12,7 @@ from filters import gaussian_blur, gaussian_kernel, filter_image
 from frequencies import unsharp_mask, unsharp_kernel, hybrid_image, fourier_magnitude
 from alignment import align_images
 from stacks import gaussian_stack, laplacian_stack
+from blend import multiresolution_blend
 from utils import load_image, save_grid
 
 
@@ -173,7 +174,8 @@ def run_sharpen(image_path, sigma=2.0, size=None, alpha=1.0):
     print(f"saved sharpening results to {out}; single filter error {error:.3e}")
 
 
-def run_hybrid(path_a, path_b, points, crop, sigma_low=8.0, sigma_high=4.0):
+def run_hybrid(path_a, path_b, points, crop, sigma_low=8.0, sigma_high=4.0,
+               color_low=False, color_high=False, mask_a=None, mask_b=None):
     original_a = load_image(path_a)
     original_b = load_image(path_b)
     points = np.array(points).reshape(4, 2)
@@ -181,8 +183,27 @@ def run_hybrid(path_a, path_b, points, crop, sigma_low=8.0, sigma_high=4.0):
     if crop is not None:
         top, bottom, left, right = crop
         image_a, image_b = image_a[top:bottom, left:right], image_b[top:bottom, left:right]
-    image_a, image_b = rgb2gray(image_a), rgb2gray(image_b)
+    low_mask = None
+    if mask_a:
+        low_mask = load_image(mask_a, grayscale=True)
+        mask = low_mask[..., None]
+        image_a = mask * image_a + (1 - mask) * image_b
+    if mask_b:
+        mask = load_image(mask_b, grayscale=True)[..., None]
+        image_b = mask * image_b + (1 - mask) * 0.9
+    if not color_low:
+        image_a = rgb2gray(image_a)
+    if not color_high:
+        image_b = rgb2gray(image_b)
+    if color_low or color_high:
+        if image_a.ndim == 2:
+            image_a = np.repeat(image_a[..., None], 3, axis=2)
+        if image_b.ndim == 2:
+            image_b = np.repeat(image_b[..., None], 3, axis=2)
     low, high, hybrid = hybrid_image(image_a, image_b, sigma_low, sigma_high)
+    if low_mask is not None:
+        mask = low_mask[..., None] if hybrid.ndim == 3 else low_mask
+        hybrid = mask * hybrid + (1 - mask) * image_b
     out = ROOT / "out" / "p2_2" / f"{path_a.stem}_{path_b.stem}"
     out.mkdir(parents=True, exist_ok=True)
 
@@ -211,6 +232,9 @@ def run_hybrid(path_a, path_b, points, crop, sigma_low=8.0, sigma_high=4.0):
         f"low image: {path_a}\nhigh image: {path_b}\n"
         f"points (x, y): {points.tolist()}\ncrop (top, bottom, left, right): {crop}\n"
         f"sigma low: {sigma_low:g}\nsigma high: {sigma_high:g}\nboundary: symm\n"
+        f"low image color: {color_low}\nhigh image color: {color_high}\n"
+        f"low mask: {mask_a}\nhigh mask: {mask_b}\n"
+        f"preserve high image outside low mask: {mask_a is not None}\n"
     )
     print(f"saved hybrid results to {out}")
 
@@ -239,12 +263,58 @@ def run_stacks(image_path, num_bands=5, sigma=2.0):
     print(f"saved stacks to {out}; reconstruction error {error:.3e}")
 
 
+def run_blend(path_a, path_b, mask_path=None, num_bands=5, sigma=2.0):
+    image_a, image_b = load_image(path_a), load_image(path_b)
+    if mask_path:
+        mask = load_image(mask_path, grayscale=True)
+    else:
+        mask = np.zeros(image_a.shape[:2])
+        mask[:, :mask.shape[1] // 2] = 1
+    result, parts_a, parts_b, masks = multiresolution_blend(image_a, image_b, mask, num_bands, sigma)
+    out = ROOT / "out" / "p2_4" / f"{path_a.stem}_{path_b.stem}"
+    out.mkdir(parents=True, exist_ok=True)
+
+    weight = mask[..., None]
+    save_grid([image_a, image_b, mask], ["input A", "input B", "mask"], out / "inputs.png")
+    save_grid([weight * image_a, (1 - weight) * image_b],
+              ["masked A", "masked B"], out / "masked_inputs.png")
+    save_grid([weight * image_a + (1 - weight) * image_b, result],
+              ["direct mask blend", "multiresolution blend"], out / "comparison.png")
+    save_grid(masks, [f"mask G{i}" for i in range(len(masks))], out / "mask_stack.png")
+    plt.imsave(out / "blend.png", np.clip(result, 0, 1))
+
+    fig, axes = plt.subplots(4, 3, figsize=(9, 12))
+    for row, level in enumerate([0, num_bands // 2, num_bands - 1]):
+        panels = [parts_a[level], parts_b[level], parts_a[level] + parts_b[level]]
+        limit = max(max(np.max(np.abs(panel)) for panel in panels), 1e-8)
+        for col, (ax, panel, title) in enumerate(zip(axes[row], panels, ["A", "B", "sum"])):
+            # same display scale across each row
+            ax.imshow(np.clip(0.5 + panel / (2 * limit), 0, 1))
+            ax.set_title(f"({chr(97 + row * 3 + col)}) {title}, L{level}")
+            ax.axis("off")
+    panels = [np.sum(parts_a, axis=0), np.sum(parts_b, axis=0), result]
+    for ax, panel, title in zip(axes[3], panels, ["(j) A contribution", "(k) B contribution", "(l) blend"]):
+        ax.imshow(np.clip(panel, 0, 1))
+        ax.set_title(title)
+        ax.axis("off")
+    fig.tight_layout()
+    fig.savefig(out / "figure_3_42.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+    (out / "parameters.txt").write_text(
+        f"image A: {path_a}\nimage B: {path_b}\nmask: {mask_path or 'left half selects A'}\n"
+        f"num bands: {num_bands}\nblur sigmas: {[sigma * 2**i for i in range(num_bands)]}\n"
+        "boundary: symm\n"
+    )
+    print(f"saved blend results to {out}")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--image", type=Path)
     parser.add_argument("--extra-image", type=Path, default=ROOT / "data" / "cameraman.png")
     parser.add_argument("--threshold", type=float, default=0.2)
-    parser.add_argument("--part", choices=["edges", "dog", "sharpen", "hybrid", "stacks", "all"], default="all")
+    parser.add_argument("--part", choices=["edges", "dog", "sharpen", "hybrid", "stacks", "blend", "all"], default="all")
     parser.add_argument("--sigma", type=float, default=2.0)
     parser.add_argument("--size", type=int)
     parser.add_argument("--dog-threshold", type=float, default=0.04)
@@ -255,7 +325,14 @@ if __name__ == "__main__":
     parser.add_argument("--crop", type=int, nargs=4, metavar="BOUND")
     parser.add_argument("--sigma-low", type=float, default=8.0)
     parser.add_argument("--sigma-high", type=float, default=4.0)
+    parser.add_argument("--color-low", action="store_true")
+    parser.add_argument("--color-high", action="store_true")
+    parser.add_argument("--low-mask", type=Path)
+    parser.add_argument("--high-mask", type=Path)
     parser.add_argument("--num-bands", type=int, default=5)
+    parser.add_argument("--blend-a", type=Path, default=ROOT / "starter" / "apple.jpeg")
+    parser.add_argument("--blend-b", type=Path, default=ROOT / "starter" / "orange.jpeg")
+    parser.add_argument("--mask", type=Path)
     args = parser.parse_args()
     if args.part in ("hybrid", "all") and (args.low_image or args.high_image):
         if not (args.low_image and args.high_image and args.points):
@@ -273,7 +350,8 @@ if __name__ == "__main__":
         crop = args.crop if args.low_image else args.crop or [480, 1010, 150, 600]
         run_hybrid(args.low_image or ROOT / "starter" / "nutmeg.jpg",
                    args.high_image or ROOT / "starter" / "DerekPicture.jpg",
-                   points, crop, args.sigma_low, args.sigma_high)
+                   points, crop, args.sigma_low, args.sigma_high, args.color_low, args.color_high,
+                   args.low_mask, args.high_mask)
     if args.part in ("stacks", "all"):
         if args.image:
             run_stacks(args.image, args.num_bands, args.sigma)
@@ -285,3 +363,5 @@ if __name__ == "__main__":
             else:
                 run_stacks(ROOT / "data" / "taj.jpg", args.num_bands, args.sigma)
                 print("apple/orange inputs still needed for the course figures")
+    if args.part in ("blend", "all"):
+        run_blend(args.blend_a, args.blend_b, args.mask, args.num_bands, args.sigma)

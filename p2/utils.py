@@ -1,9 +1,10 @@
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 
 
 def load_image(path, grayscale=False):
     with Image.open(path) as image:
+        image = ImageOps.exif_transpose(image)
         rgba = image.convert("RGBA")
         background = Image.new("RGBA", rgba.size, "white")
         image = Image.alpha_composite(background, rgba)
