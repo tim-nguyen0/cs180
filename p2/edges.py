@@ -1,10 +1,7 @@
 import numpy as np
 from scipy.signal import convolve2d
 
-if __package__:
-    from .filters import gaussian_kernel
-else:
-    from filters import gaussian_kernel
+from filters import gaussian_kernel
 
 
 def finite_difference(image, threshold=0.2, boundary="symm"):

@@ -50,15 +50,18 @@ def gaussian_kernel(sigma=2.0, size=None):
     return g @ g.T
 
 
-def gaussian_blur(image, sigma=2.0, size=None, boundary="symm"):
+def filter_image(image, kernel, boundary="symm"):
     image = np.asarray(image, dtype=np.float64)
-    kernel = gaussian_kernel(sigma, size)
     if image.ndim == 2:
         return convolve2d(image, kernel, mode="same", boundary=boundary)
     return np.stack([
         convolve2d(image[..., c], kernel, mode="same", boundary=boundary)
         for c in range(image.shape[2])
     ], axis=-1)
+
+
+def gaussian_blur(image, sigma=2.0, size=None, boundary="symm"):
+    return filter_image(image, gaussian_kernel(sigma, size), boundary)
 
 
 def gaussian_blur_5(image: np.ndarray, *, boundary: str = "symm") -> np.ndarray:

@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 from scipy.signal import convolve2d
 
-from p2.filters import convolve_four_loops, convolve_two_loops
+from filters import convolve_four_loops, convolve_two_loops
 
 
 class ConvolutionTests(unittest.TestCase):

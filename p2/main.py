@@ -5,15 +5,13 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+from skimage.color import rgb2gray
 
-if __package__:
-    from .edges import finite_difference, dog_filters, derivative_of_gaussian
-    from .filters import gaussian_blur, gaussian_kernel
-    from .utils import load_image
-else:
-    from edges import finite_difference, dog_filters, derivative_of_gaussian
-    from filters import gaussian_blur, gaussian_kernel
-    from utils import load_image
+from edges import finite_difference, dog_filters, derivative_of_gaussian
+from filters import gaussian_blur, gaussian_kernel, filter_image
+from frequencies import unsharp_mask, unsharp_kernel, hybrid_image, fourier_magnitude
+from alignment import align_images
+from utils import load_image, save_grid
 
 
 ROOT = Path(__file__).resolve().parent
@@ -128,16 +126,125 @@ def run_dog(image_path, sigma=2.0, size=None, threshold=0.04, raw_threshold=0.2)
     print(f"saved DoG results to {out}; interior error {error:.3e}")
 
 
+def run_sharpen(image_path, sigma=2.0, size=None, alpha=1.0):
+    image = load_image(image_path)
+    low, high, sharp = unsharp_mask(image, sigma, size, alpha)
+    kernel = unsharp_kernel(sigma, size, alpha)
+    single = filter_image(image, kernel)
+    error = np.max(np.abs(single - sharp))
+    out = ROOT / "out" / "p2_1" / image_path.stem
+    out.mkdir(parents=True, exist_ok=True)
+
+    # scale signed detail for display
+    limit = max(np.max(np.abs(high)), 1e-8)
+    detail = 0.5 + high / (2 * limit)
+    save_grid(
+        [image, low, detail, sharp],
+        ["original", "blurred", "high frequencies (scaled)", f"sharpened, alpha={alpha:g}"],
+        out / "overview.png"
+    )
+    alphas = sorted({0.5, 1.0, 2.0, alpha})
+    save_grid(
+        [image] + [image + value * high for value in alphas],
+        ["original"] + [f"alpha={value:g}" for value in alphas],
+        out / "alpha_comparison.png"
+    )
+
+    _, _, restored = unsharp_mask(low, sigma, size, alpha)
+    save_grid(
+        [image, low, restored], ["original", "blurred", "blurred then sharpened"],
+        out / "blur_then_sharpen.png"
+    )
+    for name, panel in [("blurred", low), ("high", detail), ("sharpened", sharp)]:
+        plt.imsave(out / f"{name}.png", np.clip(panel, 0, 1))
+    limit = np.max(np.abs(kernel))
+    plt.imsave(out / "kernel.png", kernel, cmap="RdBu_r", vmin=-limit, vmax=limit)
+
+    blur_mse = np.mean((low - image)**2)
+    restored_mse = np.mean((np.clip(restored, 0, 1) - image)**2)
+    (out / "parameters.txt").write_text(
+        f"image: {image_path}\nsigma: {sigma:g}\nsize: {kernel.shape[0]}\n"
+        f"alpha: {alpha:g}\nboundary: symm\n"
+        "single filter: (1 + alpha)*delta - alpha*G\n"
+        f"single filter max error: {error:.3e}\n"
+        f"blur MSE: {blur_mse:.6f}\nsharpened blur MSE (clipped): {restored_mse:.6f}\n"
+    )
+    print(f"saved sharpening results to {out}; single filter error {error:.3e}")
+
+
+def run_hybrid(path_a, path_b, points, crop, sigma_low=8.0, sigma_high=4.0):
+    original_a = load_image(path_a)
+    original_b = load_image(path_b)
+    points = np.array(points).reshape(4, 2)
+    image_b, image_a = align_images(original_b, original_a, tuple(points[2:]) + tuple(points[:2]))
+    if crop is not None:
+        top, bottom, left, right = crop
+        image_a, image_b = image_a[top:bottom, left:right], image_b[top:bottom, left:right]
+    image_a, image_b = rgb2gray(image_a), rgb2gray(image_b)
+    low, high, hybrid = hybrid_image(image_a, image_b, sigma_low, sigma_high)
+    out = ROOT / "out" / "p2_2" / f"{path_a.stem}_{path_b.stem}"
+    out.mkdir(parents=True, exist_ok=True)
+
+    save_grid([original_a, original_b], ["original A", "original B"], out / "originals.png")
+    save_grid([image_a, image_b], ["aligned A", "aligned B"], out / "aligned.png")
+    limit = max(np.max(np.abs(high)), 1e-8)
+    save_grid(
+        [low, 0.5 + high / (2 * limit), hybrid],
+        [f"low, sigma={sigma_low:g}", f"high (scaled), sigma={sigma_high:g}", "hybrid"],
+        out / "process.png"
+    )
+    plt.imsave(out / "hybrid.png", np.clip(hybrid, 0, 1), cmap="gray", vmin=0, vmax=1)
+
+    spectra = [fourier_magnitude(im) for im in [image_a, image_b, low, high, hybrid]]
+    fig, axes = plt.subplots(1, 5, figsize=(16, 4))
+    vmin, vmax = min(im.min() for im in spectra), max(im.max() for im in spectra)
+    for ax, spectrum, title in zip(axes, spectra, ["input A", "input B", "low", "high", "hybrid"]):
+        ax.imshow(spectrum, cmap="gray", vmin=vmin, vmax=vmax)
+        ax.set_title(title)
+        ax.axis("off")
+    fig.tight_layout()
+    fig.savefig(out / "fourier.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+    (out / "parameters.txt").write_text(
+        f"low image: {path_a}\nhigh image: {path_b}\n"
+        f"points (x, y): {points.tolist()}\ncrop (top, bottom, left, right): {crop}\n"
+        f"sigma low: {sigma_low:g}\nsigma high: {sigma_high:g}\nboundary: symm\n"
+    )
+    print(f"saved hybrid results to {out}")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--image", type=Path, default=ROOT / "data" / "cameraman.png")
+    parser.add_argument("--image", type=Path)
+    parser.add_argument("--extra-image", type=Path, default=ROOT / "data" / "cameraman.png")
     parser.add_argument("--threshold", type=float, default=0.2)
-    parser.add_argument("--part", choices=["edges", "dog", "all"], default="all")
+    parser.add_argument("--part", choices=["edges", "dog", "sharpen", "hybrid", "all"], default="all")
     parser.add_argument("--sigma", type=float, default=2.0)
     parser.add_argument("--size", type=int)
     parser.add_argument("--dog-threshold", type=float, default=0.04)
+    parser.add_argument("--alpha", type=float, default=1.0)
+    parser.add_argument("--low-image", type=Path)
+    parser.add_argument("--high-image", type=Path)
+    parser.add_argument("--points", type=float, nargs=8, metavar="XY")
+    parser.add_argument("--crop", type=int, nargs=4, metavar="BOUND")
+    parser.add_argument("--sigma-low", type=float, default=8.0)
+    parser.add_argument("--sigma-high", type=float, default=4.0)
     args = parser.parse_args()
+    if args.part in ("hybrid", "all") and (args.low_image or args.high_image):
+        if not (args.low_image and args.high_image and args.points):
+            parser.error("custom hybrids need --low-image, --high-image, and --points")
     if args.part in ("edges", "all"):
-        run_edges(args.image, args.threshold)
+        run_edges(args.image or ROOT / "data" / "cameraman.png", args.threshold)
     if args.part in ("dog", "all"):
-        run_dog(args.image, args.sigma, args.size, args.dog_threshold, args.threshold)
+        run_dog(args.image or ROOT / "data" / "cameraman.png", args.sigma, args.size,
+                args.dog_threshold, args.threshold)
+    if args.part in ("sharpen", "all"):
+        run_sharpen(args.image or ROOT / "data" / "taj.jpg", args.sigma, args.size, args.alpha)
+        run_sharpen(args.extra_image, args.sigma, args.size, args.alpha)
+    if args.part in ("hybrid", "all"):
+        points = args.points or [606, 289, 752, 363, 299, 345, 440, 331]
+        crop = args.crop if args.low_image else args.crop or [480, 1010, 150, 600]
+        run_hybrid(args.low_image or ROOT / "starter" / "nutmeg.jpg",
+                   args.high_image or ROOT / "starter" / "DerekPicture.jpg",
+                   points, crop, args.sigma_low, args.sigma_high)
