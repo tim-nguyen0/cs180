@@ -1,11 +1,44 @@
-"""Filters adapted from p1/pyramid.py. Inputs should be normalized floats."""
-
+"""filters from p1, expects normalized floats"""
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
 
+def _prepare_convolution(image: np.ndarray, kernel: np.ndarray):
+    image = np.asarray(image, dtype=np.float64)
+    kernel = np.asarray(kernel, dtype=np.float64)
+    if image.ndim != 2 or kernel.ndim != 2:
+        raise ValueError("Image and kernel must be 2-D")
+    if min(image.shape) == 0 or min(kernel.shape) == 0:
+        raise ValueError("Image and kernel must be nonempty")
+
+    kh, kw = kernel.shape
+    # extra pad on top/left for even kernels
+    padding = ((kh // 2, (kh - 1) // 2), (kw // 2, (kw - 1) // 2))
+    padded = np.pad(image, padding, mode="constant")
+    return padded, np.flip(kernel, axis=(0, 1)), np.zeros_like(image)
+
+
+def convolve_four_loops(image: np.ndarray, kernel: np.ndarray) -> np.ndarray:
+    padded, kernel, out = _prepare_convolution(image, kernel)
+    kh, kw = kernel.shape
+    for i in range(out.shape[0]):
+        for j in range(out.shape[1]):
+            for m in range(kh):
+                for n in range(kw):
+                    out[i, j] += padded[i + m, j + n] * kernel[m, n]
+    return out
+
+
+def convolve_two_loops(image: np.ndarray, kernel: np.ndarray) -> np.ndarray:
+    padded, kernel, out = _prepare_convolution(image, kernel)
+    kh, kw = kernel.shape
+    for i in range(out.shape[0]):
+        for j in range(out.shape[1]):
+            out[i, j] = np.sum(padded[i:i + kh, j:j + kw] * kernel)
+    return out
+
 
 def gaussian_blur_5(image: np.ndarray, *, boundary: str = "symm") -> np.ndarray:
-    """5x5 binomial blur for grayscale or RGB. Padding: 'symm' or zero 'fill'."""
+    """5x5 blur, works on grayscale and RGB"""
     image = np.asarray(image, dtype=np.float64)
     if image.ndim not in (2, 3) or (image.ndim == 3 and image.shape[2] != 3):
         raise ValueError("Expected a grayscale (H, W) or RGB (H, W, 3) image")
@@ -27,7 +60,6 @@ def gaussian_blur_5(image: np.ndarray, *, boundary: str = "symm") -> np.ndarray:
 
 
 def high_pass(image: np.ndarray, *, boundary: str = "symm") -> np.ndarray:
-    """Subtract the blurred image from the original."""
     image = np.asarray(image, dtype=np.float64)
     return image - gaussian_blur_5(image, boundary=boundary)
 
@@ -35,7 +67,7 @@ def high_pass(image: np.ndarray, *, boundary: str = "symm") -> np.ndarray:
 def band_pass(
     image: np.ndarray, low: int = 2, high: int = 5, *, boundary: str = "symm"
 ) -> np.ndarray:
-    """Difference of two blurs; low and high are blur counts, not sigmas."""
+    """low/high are number of blurs, not sigma"""
     if not isinstance(low, (int, np.integer)) or not isinstance(high, (int, np.integer)):
         raise ValueError("low and high must be integer blur counts")
     if not 0 <= low < high:
