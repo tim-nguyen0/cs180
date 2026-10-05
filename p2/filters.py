@@ -1,6 +1,8 @@
 """filters from p1, expects normalized floats"""
 import numpy as np
+import cv2
 from numpy.lib.stride_tricks import sliding_window_view
+from scipy.signal import convolve2d
 
 def _prepare_convolution(image: np.ndarray, kernel: np.ndarray):
     image = np.asarray(image, dtype=np.float64)
@@ -35,6 +37,28 @@ def convolve_two_loops(image: np.ndarray, kernel: np.ndarray) -> np.ndarray:
         for j in range(out.shape[1]):
             out[i, j] = np.sum(padded[i:i + kh, j:j + kw] * kernel)
     return out
+
+
+def gaussian_kernel(sigma=2.0, size=None):
+    if sigma <= 0:
+        raise ValueError("sigma must be positive")
+    if size is None:
+        size = 2 * int(np.ceil(3 * sigma)) + 1
+    if size < 1 or size % 2 == 0:
+        raise ValueError("size must be positive and odd")
+    g = cv2.getGaussianKernel(size, sigma)
+    return g @ g.T
+
+
+def gaussian_blur(image, sigma=2.0, size=None, boundary="symm"):
+    image = np.asarray(image, dtype=np.float64)
+    kernel = gaussian_kernel(sigma, size)
+    if image.ndim == 2:
+        return convolve2d(image, kernel, mode="same", boundary=boundary)
+    return np.stack([
+        convolve2d(image[..., c], kernel, mode="same", boundary=boundary)
+        for c in range(image.shape[2])
+    ], axis=-1)
 
 
 def gaussian_blur_5(image: np.ndarray, *, boundary: str = "symm") -> np.ndarray:
