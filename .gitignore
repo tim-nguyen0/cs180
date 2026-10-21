@@ -2,3 +2,14 @@ p1/data/
 p1/__pycache__
 p1/out
 p2.zip
+
+p3/.cache/
+p3/data/
+p3/results/
+p3/__pycache__/
+p3/vendor/
+
+# editor and notebook noise, anywhere in the repo
+.ipynb_checkpoints/
+__pycache__/
+.vscode/
