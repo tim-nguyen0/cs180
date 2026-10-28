@@ -1,0 +1,190 @@
+import argparse
+import time
+from pathlib import Path
+import numpy as np
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+from homography import (computeH, build_system, show_correspondences, warpImageNearestNeighbor,
+                        warpImageBilinear, _output_bbox)
+import mosaic
+
+ROOT = Path(__file__).resolve().parent
+DATA, CORR, OUT = ROOT / "data", ROOT / "corr", ROOT / "out"
+SETS = {1: ["%d.JPG" % i for i in range(1, 8)], 2: ["2-%d.JPG" % i for i in range(1, 6)]}
+
+
+def save(img, path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    plt.imsave(path, np.clip(img, 0, 1))
+
+
+def grid(images, titles, path, ncols=None, size=4):
+    n = len(images); ncols = ncols or n; nrows = -(-n // ncols)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(size * ncols, size * nrows * 0.65), squeeze=False)
+    for ax in axes.flat:
+        ax.axis("off")
+    for ax, im, t in zip(axes.flat, images, titles):
+        ax.imshow(np.clip(im, 0, 1), cmap="gray", vmin=0, vmax=1); ax.set_title(t)
+    fig.tight_layout(); path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=120, bbox_inches="tight"); plt.close(fig)
+
+
+# ---------------------------------------------------------------- A.2
+def run_corr():
+    out = OUT / "a2"; out.mkdir(parents=True, exist_ok=True)
+    for f in sorted(CORR.glob("*_*.npz")):
+        if f.stem.startswith("rect_"):
+            continue
+        a, b = f.stem.rsplit("_", 1) if not f.stem.startswith("2-") else f.stem.split("_")
+        d = np.load(f); p1, p2 = d["im1_pts"], d["im2_pts"]
+        H = computeH(p1, p2); A, bvec = build_system(p1, p2)
+        q = np.hstack([p1, np.ones((len(p1), 1))]) @ H.T; q = q[:, :2] / q[:, 2:]
+        err = np.linalg.norm(q - p2, axis=1)
+        im1, im2 = mosaic.load_scaled(DATA / (a + ".JPG"), 0.25), mosaic.load_scaled(DATA / (b + ".JPG"), 0.25)
+        fig = show_correspondences(im1, im2, p1 / 4, p2 / 4, save=out / f"corr_{f.stem}.png"); plt.close(fig)
+        with np.printoptions(precision=2, suppress=True, linewidth=250):
+            txt = [f"pair {a} -> {b}: {len(p1)} correspondences", "",
+                   "im1_pts (x, y)            im2_pts (x', y')", str(np.hstack([p1, p2])), "",
+                   f"A ({A.shape[0]} x 8), h = (a b c d e f g h)^T, b:", str(np.c_[A, bvec]), "",
+                   "least-squares H (H[2,2] = 1):", np.array2string(H, precision=6), "",
+                   f"reprojection error px: mean {err.mean():.2f}, max {err.max():.2f}"]
+        (out / f"system_{f.stem}.txt").write_text("\n".join(txt))
+        print(f"{f.stem}: n={len(p1)} err mean {err.mean():.2f} max {err.max():.2f}")
+
+
+# ---------------------------------------------------------------- A.3
+def order_corners(c):
+    """Sort 4 points clockwise starting at the top-left, whatever order they were clicked in."""
+    c = np.asarray(c, float)
+    ang = np.arctan2(*(c - c.mean(0))[:, ::-1].T)          # angle about the centroid (y down => clockwise)
+    c = c[np.argsort(ang)]
+    tl = np.argmin(c.sum(1))                               # smallest x+y is the top-left corner
+    return np.roll(c, -tl, axis=0)
+
+
+def rectify_H(corners, pixels=None):
+    """H sending the 4 clicked corners of a rectangle to an axis-aligned rectangle whose aspect ratio
+    is taken from the average measured side lengths (or given as (w, h) pixels)."""
+    c = order_corners(corners)                             # TL, TR, BR, BL
+    if pixels is None:
+        w = (np.linalg.norm(c[1] - c[0]) + np.linalg.norm(c[2] - c[3])) / 2
+        h = (np.linalg.norm(c[3] - c[0]) + np.linalg.norm(c[2] - c[1])) / 2
+    else:
+        w, h = pixels
+    target = np.array([[0, 0], [w, 0], [w, h], [0, h]])
+    return computeH(c, target), (w, h)
+
+
+def run_rectify(names, scale=0.5):
+    out = OUT / "a3"; out.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        stem = Path(name).stem
+        corners = order_corners(np.load(CORR / f"rect_{stem}.npz")["corners"] * scale)
+        im = mosaic.load_scaled(DATA / name, scale)
+        H, (w, h) = rectify_H(corners)
+        # whole projected image; only if a corner maps behind the camera (w <= 0, infinite extent)
+        # fall back to a window around the rectangle
+        Hh, W = im.shape[:2]
+        wc = (np.array([[0, 0, 1], [W - 1, 0, 1], [0, Hh - 1, 1], [W - 1, Hh - 1, 1]]) @ H.T)[:, 2]
+        if wc.min() > 0:
+            bbox = _output_bbox(im, H)
+        else:
+            k = 2 * W
+            bbox = (-k, -k, w + k, h + k)
+        # pixels past the plane's horizon map to source points behind the camera: mask them out
+        G = np.linalg.inv(H)
+        xs, ys = np.meshgrid(np.arange(bbox[0], bbox[2] + 1), np.arange(bbox[1], bbox[3] + 1))
+        front = (G[2, 0] * xs + G[2, 1] * ys + G[2, 2]) > 0
+        results, times = {}, {}
+        for tag, fn in (("nearest", warpImageNearestNeighbor), ("bilinear", warpImageBilinear)):
+            t = time.perf_counter(); warped, alpha, _ = fn(im, H, bbox); times[tag] = time.perf_counter() - t
+            alpha = alpha * front
+            results[tag] = np.dstack([warped * alpha[..., None], alpha])
+        ys, xs = np.where(results["bilinear"][..., 3] > 0)      # drop empty canvas around the warp
+        trim = np.s_[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+        for tag in results:
+            results[tag] = results[tag][trim]
+            save(results[tag], out / f"{stem}_{tag}.png")
+        bbox = (bbox[0] + xs.min(), bbox[1] + ys.min(), bbox[0] + xs.max(), bbox[1] + ys.max())
+        # zoomed crop on the rectified object for the quality comparison
+        ox, oy = -bbox[0], -bbox[1]
+        crop = np.s_[int(oy):int(oy + h), int(ox):int(ox + w)]
+        cw = max(1, int(min(w, h) * 0.15))
+        # zoom on the most detailed patch inside the rectangle (highest local gradient energy)
+        g = results["bilinear"][crop][..., :3].mean(-1)
+        g = np.abs(np.diff(g, axis=0))[:, :-1] + np.abs(np.diff(g, axis=1))[:-1]
+        e = np.cumsum(np.cumsum(np.pad(g, ((1, 0), (1, 0))), 0), 1)
+        n = 2 * cw
+        if g.shape[0] > n and g.shape[1] > n:
+            box = e[n:, n:] - e[:-n, n:] - e[n:, :-n] + e[:-n, :-n]
+            zy, zx = np.unravel_index(box.argmax(), box.shape)
+        else:
+            zy, zx = 0, 0
+        zoom = np.s_[int(oy) + zy:int(oy) + zy + n, int(ox) + zx:int(ox) + zx + n]
+        fig, axes = plt.subplots(2, 3, figsize=(15, 8))
+        axes[0, 0].imshow(im); axes[0, 0].plot(*np.vstack([corners, corners[:1]]).T, "y-o", ms=4)
+        axes[0, 0].set_title(f"{name} (clicked rectangle)")
+        axes[0, 1].imshow(results["nearest"][crop]); axes[0, 1].set_title(f"nearest neighbour ({times['nearest']:.2f}s)")
+        axes[0, 2].imshow(results["bilinear"][crop]); axes[0, 2].set_title(f"bilinear ({times['bilinear']:.2f}s)")
+        axes[1, 0].imshow(results["nearest"]); axes[1, 0].set_title("full warp (nearest)")
+        axes[1, 1].imshow(results["nearest"][zoom], interpolation="nearest"); axes[1, 1].set_title("zoom: nearest")
+        axes[1, 2].imshow(results["bilinear"][zoom], interpolation="nearest"); axes[1, 2].set_title("zoom: bilinear")
+        for ax in axes.flat:
+            ax.axis("off")
+        fig.tight_layout(); fig.savefig(out / f"{stem}_comparison.png", dpi=120, bbox_inches="tight"); plt.close(fig)
+        with np.printoptions(precision=6, suppress=True):
+            (out / f"{stem}_H.txt").write_text(
+                f"corners (scale {scale}):\n{corners}\n\ntarget rectangle {w:.1f} x {h:.1f}\n\nH:\n{H}\n\n"
+                f"nearest {times['nearest']:.3f}s   bilinear {times['bilinear']:.3f}s\n")
+        print(f"{name}: nearest {times['nearest']:.2f}s, bilinear {times['bilinear']:.2f}s -> {out}")
+
+
+# ---------------------------------------------------------------- A.4
+def run_mosaic(names, tag, scale=0.5, limit=3.0, sigma=None):
+    out = OUT / "a4" / tag; out.mkdir(parents=True, exist_ok=True)
+    t = time.perf_counter()
+    r = mosaic.build_mosaic(names, CORR, DATA, scale=scale, limit=limit, sigma=sigma)
+    print(f"{tag}: canvas {r['blend'].shape[1]}x{r['blend'].shape[0]} at scale {scale}, "
+          f"sigma {r['sigma']:.1f}, {time.perf_counter() - t:.1f}s")
+    save(r["blend"], out / "mosaic_two_band.jpg")
+    save(r["average"], out / "mosaic_feather_average.jpg")
+    grid(r["images"], [Path(n).stem for n in names], out / "sources.png", ncols=min(4, len(names)))
+    grid(list(r["ims"]), [f"warped {Path(n).stem}" for n in names], out / "warped.png", ncols=min(4, len(names)), size=5)
+    grid(list(r["weights"]), [f"weight {Path(n).stem}" for n in names], out / "weights.png", ncols=min(4, len(names)), size=5)
+    label = np.where(r["weights"].max(0) > 0, r["weights"].argmax(0) + 1, 0)   # which image owns each pixel
+    plt.imsave(out / "seams.png", label, cmap="tab10", vmin=0, vmax=9)
+    # overlap-only comparison: hard overwrite vs feather average vs two-band blend
+    overwrite = np.zeros_like(r["blend"])
+    for im, a in zip(r["ims"], r["alphas"]):
+        overwrite[a > 0] = im[a > 0]
+    save(overwrite, out / "mosaic_overwrite.jpg")
+    grid([overwrite, r["average"], r["blend"]], ["overwrite", "feathered average", "2-band blend"],
+         out / "blend_comparison.png", ncols=1, size=14)
+    with np.printoptions(precision=6, suppress=True):
+        (out / "homographies.txt").write_text("\n\n".join(
+            f"H {Path(n).stem} -> reference {Path(names[len(names)//2]).stem} (scale {scale}):\n{H}" for n, H in zip(names, r["Hs"])))
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("corr")
+    p = sub.add_parser("rectify"); p.add_argument("images", nargs="+"); p.add_argument("--scale", type=float, default=0.5)
+    p = sub.add_parser("mosaic")
+    p.add_argument("--set", type=int, choices=SETS); p.add_argument("--names", nargs="+"); p.add_argument("--tag")
+    p.add_argument("--scale", type=float, default=0.5); p.add_argument("--limit", type=float, default=3.0)
+    p.add_argument("--sigma", type=float)
+    a = ap.parse_args()
+    if a.cmd == "corr":
+        run_corr()
+    elif a.cmd == "rectify":
+        run_rectify(a.images, a.scale)
+    else:
+        names = SETS[a.set] if a.set else a.names
+        run_mosaic(names, a.tag or (f"set{a.set}" if a.set else "custom"), a.scale, a.limit, a.sigma)
+
+
+if __name__ == "__main__":
+    main()
