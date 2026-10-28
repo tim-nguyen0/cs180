@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Project 4</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.11/katex.min.css">
+    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.11/katex.min.js"></script>
+    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.11/contrib/auto-render.min.js"
+        onload="renderMathInElement(document.body, {delimiters: [{left: '\\(', right: '\\)', display: false}, {left: '\\[', right: '\\]', display: true}], throwOnError: false});"></script>
+</head>
+<body>
+    <div class="page">
+        <header class="site-header">
+            <h1>Project 4: Image Warping and Mosaicing</h1>
+            <p class="subtitle">Tim Nguyen</p>
+        </header>
+        <nav class="nav">
+            <a href="#a1">A.1 Pictures</a>
+            <a href="#a2">A.2 Homographies</a>
+            <a href="#a3">A.3 Warping</a>
+            <a href="#a4">A.4 Mosaics</a>
+            <a href="../index.html">&larr; Portfolio</a>
+        </nav>
+        <main class="content">
+            <section id="a1">
+                <h2>A.1 Shoot the Pictures</h2>
+                <p>For this project I took sets of photos by standing in one spot and turning the camera between shots, so that the only
+                thing changing between frames is the rotation. That keeps the center of projection fixed, which is what makes the
+                transform between any two frames a homography. I aimed for about 60% overlap between neighbors.</p>
+                <p>The first set is seven frames of a courtyard from a balcony. The second is five frames of my room. Both are
+                \(3840 \times 2160\). The third set is a blossom branch from an open panorama dataset, four frames at \(1200 \times 795\).</p>
+                <figure class="wide"><a href="resources/a4/set1_sources.jpg"><img src="resources/a4/set1_sources.jpg" alt="Seven source photos of the courtyard, left to right." loading="lazy"></a><figcaption>Set 1: courtyard, 7 images.</figcaption></figure>
+                <figure class="wide"><a href="resources/a4/set2_sources.jpg"><img src="resources/a4/set2_sources.jpg" alt="Five source photos of the room, left to right." loading="lazy"></a><figcaption>Set 2: room, 5 images.</figcaption></figure>
+                <figure class="wide"><a href="resources/a4/flower_sources.jpg"><img src="resources/a4/flower_sources.jpg" alt="Four source photos of a blossom branch, left to right." loading="lazy"></a><figcaption>Set 3: blossom branch, 4 images.</figcaption></figure>
+                <p>I also took one photo of a tissue box on my desk, at an angle, to test rectification on.</p>
+                <div class="compare">
+                    <figure><a href="resources/a1/tissue.jpg"><img src="resources/a1/tissue.jpg" alt="Tissue box on a desk, photographed at an angle." loading="lazy"></a><figcaption>Tissue box, \(5712 \times 4284\).</figcaption></figure>
+                </div>
+            </section>
+
+            <section id="a2">
+                <h2>A.2 Recover Homographies</h2>
+                <p>A homography maps a point in one image to a point in the other, up to scale:
+                \[
+                \begin{pmatrix} x' \\ y' \\ 1 \end{pmatrix} \sim
+                \begin{pmatrix} a & b & c \\ d & e & f \\ g & h & 1 \end{pmatrix}
+                \begin{pmatrix} x \\ y \\ 1 \end{pmatrix}.
+                \]
+                The bottom-right entry is fixed to 1, so there are eight unknowns. Writing out the division by the third row,
+                \[
+                x' = \frac{ax + by + c}{gx + hy + 1}, \qquad y' = \frac{dx + ey + f}{gx + hy + 1}.
+                \]
+                These aren't linear in the unknowns because of the denominator, but multiplying it out fixes that. Each correspondence
+                then gives two linear equations:
+                \[
+                \begin{pmatrix}
+                x & y & 1 & 0 & 0 & 0 & -x x' & -y x' \\
+                0 & 0 & 0 & x & y & 1 & -x y' & -y y'
+                \end{pmatrix}
+                \begin{pmatrix} a \\ b \\ c \\ d \\ e \\ f \\ g \\ h \end{pmatrix}
+                =
+                \begin{pmatrix} x' \\ y' \end{pmatrix}.
+                \]</p>
+                <p><code>computeH</code> stacks these rows for all \(n\) points into a \(2n \times 8\) matrix \(A\) and solves
+                \(A\mathbf{h} = \mathbf{b}\) with <code>np.linalg.lstsq</code>. Four points would be enough to solve it exactly, but
+                a few pixels of click error then swing \(g\) and \(h\) a lot, so I use more than four and let least squares average the
+                error out. I checked the function on a made-up \(H\) and random points first; it recovers the matrix to \(10^{-10}\).</p>
+
+                <h3>Correspondences</h3>
+                <p>I wrote a small matplotlib clicking tool for this. It shows the two images side by side, alternates clicks between
+                them, and lets me zoom with the toolbar before clicking, which matters because an error of a couple of pixels is visible
+                in the mosaic. I picked 6&ndash;8 points per pair, on window corners, buds, and other sharp features spread across the overlap.</p>
+                <p>Two of my first clicks on the courtyard were on the wrong window. The facade repeats, and from the zoomed view the
+                windows all look alike. I found them by leaving out one point at a time and recomputing \(H\): dropping the bad point
+                took the mean error from hundreds of pixels down to a few.</p>
+                <figure class="wide"><a href="resources/a2/corr_2_3.jpg"><img src="resources/a2/corr_2_3.jpg" alt="Correspondences between images 2 and 3 of set 1." loading="lazy"></a><figcaption>Set 1, images 2 &rarr; 3. Mean reprojection error 3.0 px.</figcaption></figure>
+                <figure class="wide"><a href="resources/a2/corr_4_5.jpg"><img src="resources/a2/corr_4_5.jpg" alt="Correspondences between images 4 and 5 of set 1." loading="lazy"></a><figcaption>Set 1, images 4 &rarr; 5. Mean error 3.4 px.</figcaption></figure>
+                <figure class="wide"><a href="resources/a2/corr_2-2_2-3.jpg"><img src="resources/a2/corr_2-2_2-3.jpg" alt="Correspondences between images 2-2 and 2-3 of set 2." loading="lazy"></a><figcaption>Set 2, images 2 &rarr; 3. Mean error 4.4 px.</figcaption></figure>
+                <figure class="wide"><a href="resources/a2/corr_flower-2_flower-3.jpg"><img src="resources/a2/corr_flower-2_flower-3.jpg" alt="Correspondences between images 2 and 3 of the blossom set." loading="lazy"></a><figcaption>Set 3, images 2 &rarr; 3. Mean error 2.2 px.</figcaption></figure>
+
+                <h3>System of equations and recovered H</h3>
+                <p>For set 1, images 2 &rarr; 3, there are seven correspondences, so \(A\) is \(14 \times 8\). Here are the first
+                four rows, from the first two points, in pixels:</p>
+                <figure class="code"><figcaption>A h = b, first two correspondences</figcaption><pre><code>[  836.9  1517.3   1.0     0.0     0.0   0.0   -216019.7   -391634.7 ] h =  258.1
+[    0.0     0.0   0.0   836.9  1517.3   1.0  -1311433.7  -2377574.8 ] h = 1567.0
+[  835.2  1357.6   1.0     0.0     0.0   0.0   -212598.3   -345602.5 ] h =  254.6
+[    0.0     0.0   0.0   835.2  1357.6   1.0  -1175299.8  -1910582.3 ] h = 1407.3</code></pre></figure>
+                <p>The least-squares solution is
+                \[
+                H_{2 \to 3} =
+                \begin{pmatrix}
+                1.1971 & 0.0145 & -749.64 \\
+                0.0427 & 1.1467 & -113.42 \\
+                4.5 \times 10^{-5} & 1.4 \times 10^{-5} & 1
+                \end{pmatrix}.
+                \]
+                The big negative \(c\) is the camera panning right, and the tiny \(g, h\) are the perspective between the two views.
+                The columns of \(A\) range from 1 to about \(10^6\), which is why the solve is so sensitive to click error.</p>
+            </section>
+
+            <section id="a3">
+                <h2>A.3 Warp the Images</h2>
+                <p>Both warps use inverse mapping. I push the four corners of the input through \(H\) to find the output bounding box, then
+                for every output pixel center I go backwards through \(H^{-1}\), divide by \(w\), and land on a fractional source location
+                \((u, v)\). Doing it this way means every output pixel gets filled and there are no holes. I treat pixel \((i, j)\) as
+                centered at \((u, v) = (j, i)\), and anything that lands outside \([0, W-1] \times [0, H-1]\) gets alpha 0, so the output
+                carries an alpha channel saying where it has real data.</p>
+                <p>Nearest neighbor just rounds \((u, v)\) and reads that pixel. Bilinear takes the four pixels around it and weights them
+                by how close it is to each. With \(u_0 = \lfloor u \rfloor\), \(v_0 = \lfloor v \rfloor\) and fractional parts
+                \(f_u = u - u_0\), \(f_v = v - v_0\),
+                \[
+                I(u, v) = (1-f_u)(1-f_v)\, I[v_0, u_0] + f_u (1-f_v)\, I[v_0, u_0+1] + (1-f_u) f_v\, I[v_0+1, u_0] + f_u f_v\, I[v_0+1, u_0+1].
+                \]
+                Both are vectorized over the whole output grid, so there is no Python loop over pixels.</p>
+
+                <h3>Rectification</h3>
+                <p>To test everything on a single photo I click the four corners of something I know is a rectangle, then make up the
+                second set of points by hand: an axis-aligned rectangle whose width and height are the average measured side lengths.
+                Four pairs is exactly enough for <code>computeH</code>, and warping the whole image with that \(H\) should make the
+                object square-on.</p>
+                <p>One thing that bit me: when the plane is steep, part of the image maps past the plane's horizon. Those output pixels
+                have \(w \le 0\) in the inverse map, and if you sample them anyway you get a mirrored copy of the scene. I mask them out.</p>
+                <figure class="wide"><a href="resources/a3/tissue_comparison.jpg"><img src="resources/a3/tissue_comparison.jpg" alt="Tissue box rectification: clicked face, nearest and bilinear results, full warp, zoomed crops." loading="lazy"></a><figcaption>Tissue box.</figcaption></figure>
+                <figure class="wide"><a href="resources/a3/3_comparison.jpg"><img src="resources/a3/3_comparison.jpg" alt="Window rectification on a building facade." loading="lazy"></a><figcaption>Facade window (set 1, image 3).</figcaption></figure>
+                <figure class="wide"><a href="resources/a3/2-5_comparison.jpg"><img src="resources/a3/2-5_comparison.jpg" alt="3D printer door rectification in the room photo." loading="lazy"></a><figcaption>3D printer door (set 2, image 5).</figcaption></figure>
+                <p>For the tissue box the four corners give
+                \[
+                H_{\text{tissue}} =
+                \begin{pmatrix}
+                3.475 & 0.000 & -6253.7 \\
+                0.384 & 2.895 & -2059.2 \\
+                9.6 \times 10^{-4} & -1.7 \times 10^{-4} & 1
+                \end{pmatrix}.
+                \]
+                The box face comes out square and the desk, which is on a different plane, stretches into a long wedge, which is what should happen.</p>
+
+                <h3>Nearest neighbor vs. bilinear</h3>
+                <table class="timings">
+                    <tr><th>Image (half resolution)</th><th>Output size</th><th>Nearest</th><th>Bilinear</th></tr>
+                    <tr><td>Facade window</td><td>2280 &times; 1834</td><td>0.21 s</td><td>0.55 s</td></tr>
+                    <tr><td>3D printer door</td><td>3947 &times; 2658</td><td>0.48 s</td><td>1.19 s</td></tr>
+                    <tr><td>Tissue box</td><td>10997 &times; 8618</td><td>3.8 s</td><td>10.4 s</td></tr>
+                </table>
+                <p>The zoomed crops show the difference. Wherever the warp magnifies the source, nearest neighbor turns edges into
+                staircases, because runs of output pixels round to the same source pixel and then jump a whole pixel at once. You can
+                see it on the window mullion, the tissue box lettering, and the printer logo. Bilinear keeps those edges straight, at the
+                cost of a slightly softer texture on things like the paper grain.</p>
+                <p>Bilinear reads four pixels and computes four weights per output pixel instead of one lookup, and in my NumPy version
+                that is about 2.5&ndash;3&times; slower. For previews, or when the warp is close to identity, nearest is fine. For anything
+                being magnified or rotated I'd use bilinear.</p>
+            </section>
+
+            <section id="a4">
+                <h2>A.4 Blend the Images into a Mosaic</h2>
+                <h3>Procedure</h3>
+                <p>I went with the one-shot approach: pick the middle image of each set as the reference, warp everything into its
+                projection, and blend once at the end.</p>
+                <p>I only have homographies between neighbors, so I chain them. Going right from the reference, \(H_{i \to \mathrm{ref}}\)
+                is a product of the pairwise matrices; going left it is a product of their inverses. Then I push every image's corners
+                through its \(H_{i \to \mathrm{ref}}\) and take the union bounding box as the canvas. A planar projection stretches the
+                outermost frames of a wide sweep enormously, so I clip the canvas to a few image widths on each side of the reference.</p>
+                <p>Each image is warped onto that shared canvas with bilinear interpolation. Before warping I append a fourth channel,
+                a feathering weight that is 1 at the center and falls linearly to 0 at the border (the distance transform of the border),
+                so it gets warped along with the colors and I don't have to recompute it in the output frame.</p>
+                <p>A plain feathered average over the images already removes hard seams, but wherever my registration is off by a
+                pixel or two it superimposes two shifted copies and edges ghost. The spec suggested a Laplacian pyramid for that, and
+                two bands turned out to be enough. Each warped image is split into a low band (Gaussian blur with \(\sigma\) about 3%
+                of an image width, normalized by the blurred alpha so the black outside the image doesn't bleed in) and a high band, the
+                Laplacian residual, using <code>laplacian_stack</code> from project 2.</p>
+                <p>Every canvas pixel is owned by whichever image has the largest feathering weight there. The high band is combined
+                with those hard ownership masks, so every edge comes from exactly one image and can't ghost. The low band is combined
+                with the same masks blurred by the same Gaussian, so exposure differences fade over a wide transition instead of
+                stepping. Adding the two bands gives the mosaic. The high-band masks can also be blurred by a small \(\sigma\), which
+                turns the hard cut into a narrow crossfade; I needed that for the third set which had more background variation.</p>
+                <figure class="wide"><a href="resources/a4/set1_warped.jpg"><img src="resources/a4/set1_warped.jpg" alt="Set 1 images warped onto the shared canvas." loading="lazy"></a><figcaption>Set 1 warped onto the canvas.</figcaption></figure>
+                <div class="compare">
+                    <figure><a href="resources/a4/set1_weights.jpg"><img src="resources/a4/set1_weights.jpg" alt="Feathering weights of each set 1 image after warping." loading="lazy"></a><figcaption>Warped feathering weights.</figcaption></figure>
+                    <figure><a href="resources/a4/set1_seams.jpg"><img src="resources/a4/set1_seams.jpg" alt="Which image owns each pixel of the set 1 mosaic." loading="lazy"></a><figcaption>Pixel ownership for the high band.</figcaption></figure>
+                </div>
+
+                <h3>Mosaic 1: courtyard</h3>
+                <figure class="wide"><a href="resources/a4/set1_two_band.jpg"><img src="resources/a4/set1_two_band.jpg" alt="Courtyard mosaic, two-band blend." loading="lazy"></a><figcaption>Two-band blend.</figcaption></figure>
+                <figure class="wide"><a href="resources/a4/set1_overwrite.jpg"><img src="resources/a4/set1_overwrite.jpg" alt="Courtyard mosaic with each image overwriting the previous." loading="lazy"></a><figcaption>Overwrite: hard seams and exposure steps.</figcaption></figure>
+                <figure class="wide"><a href="resources/a4/set1_average.jpg"><img src="resources/a4/set1_average.jpg" alt="Courtyard mosaic with feathered averaging only." loading="lazy"></a><figcaption>Feathered average: no seams, but window frames double where registration is a few pixels off.</figcaption></figure>
+                <p>The overwrite version shows what the blend has to fix: a hard edge wherever one frame ends, plus a brightness step,
+                since the right side of the sweep is in sun and the left is in shade. Feathering removes both, but the window frames in the
+                middle of the facade double up. The two-band result keeps the smooth exposure ramp from the low band while every window
+                edge comes from a single frame.</p>
+
+                <h3>Mosaic 2: room</h3>
+                <figure class="wide"><a href="resources/a4/set2_warped.jpg"><img src="resources/a4/set2_warped.jpg" alt="Set 2 images warped onto the shared canvas." loading="lazy"></a><figcaption>Set 2 warped onto the canvas.</figcaption></figure>
+                <figure class="wide"><a href="resources/a4/set2_two_band.jpg"><img src="resources/a4/set2_two_band.jpg" alt="Room mosaic, two-band blend." loading="lazy"></a><figcaption>Two-band blend.</figcaption></figure>
+                <figure class="wide"><a href="resources/a4/set2_average.jpg"><img src="resources/a4/set2_average.jpg" alt="Room mosaic with feathered averaging only." loading="lazy"></a><figcaption>Feathered average.</figcaption></figure>
+                <p>This set spans a wider angle, and the leftmost frame is mostly an open door about a meter from the camera. The
+                planar projection stretches that frame to several times its size, and because the door is so close, the far wall and the
+                door can't both satisfy one homography. The wall, desk and shelf register well; the door is where it shows.</p>
+
+                <h3>Mosaic 3: blossom branch (open pano dataset)</h3>
+                <figure class="wide"><a href="resources/a4/flower_warped.jpg"><img src="resources/a4/flower_warped.jpg" alt="Set 3 images warped onto the shared canvas." loading="lazy"></a><figcaption>Set 3 warped onto the canvas.</figcaption></figure>
+                <figure class="wide"><a href="resources/a4/flower_two_band.jpg"><img src="resources/a4/flower_two_band.jpg" alt="Blossom branch mosaic, two-band blend." loading="lazy"></a><figcaption>Two-band blend, low band \(\sigma = 120\), high band crossfade \(\sigma = 30\). \(2278 \times 889\) at full resolution.</figcaption></figure>
+                <figure class="wide"><a href="resources/a4/flower_overwrite.jpg"><img src="resources/a4/flower_overwrite.jpg" alt="Blossom mosaic with each image overwriting the previous." loading="lazy"></a><figcaption>Overwrite.</figcaption></figure>
+                <figure class="wide"><a href="resources/a4/flower_average.jpg"><img src="resources/a4/flower_average.jpg" alt="Blossom mosaic with feathered averaging only." loading="lazy"></a><figcaption>Feathered average: the petals double in the overlaps.</figcaption></figure>
+                <p>The branch registered to about 2 px, but the first two-band result had a visible line in the background at every seam.
+                My first guess was exposure, so I made the low-band blur wider. That did nothing. The real problem is that the
+                out-of-focus background is far behind the branch and doesn't follow the branch's homography, so at a hard cut the bokeh
+                simply doesn't line up. Crossfading the high band over 30 px hides that discontinuity, and the petals, which are
+                registered correctly, stay sharp.</p>
+            </section>
+        </main>
+    </div>
+</body>
+</html>

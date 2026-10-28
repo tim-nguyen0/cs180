@@ -68,18 +68,20 @@ def blend_average(ims, weights):
     return np.einsum("nhwc,nhw->hwc", ims, weights) / np.maximum(wsum, 1e-8)[..., None]
 
 
-def blend_two_band(ims, alphas, weights, sigma):
-    # high band uses hard argmax masks, low band uses the blurred masks
+def blend_two_band(ims, alphas, weights, sigma, sigma_high=0):
+    # argmax masks: high band crosses the seam over sigma_high (0 = hard cut), low band over sigma
     masks = (weights == weights.max(0)) & (weights > 0)
-    acc = np.zeros(ims.shape[1:]); norm = np.zeros(ims.shape[1:3])
+    acc_h = np.zeros(ims.shape[1:]); acc_l = np.zeros(ims.shape[1:])
+    norm_h = np.zeros(ims.shape[1:3]); norm_l = np.zeros(ims.shape[1:3])
     for im, a, m in zip(ims, alphas, masks):
         low = lowpass(im * a[..., None], sigma) / np.maximum(lowpass(a, sigma), 1e-8)[..., None]
         high, low = laplacian_stack([im, low])
-        m_high = m.astype(float)
-        m_low = lowpass(m_high, sigma) * a
-        acc += m_high[..., None] * high + m_low[..., None] * low
-        norm += m_low
-    return acc / np.maximum(norm, 1e-8)[..., None]
+        m = m.astype(float)
+        m_high = (lowpass(m, sigma_high) if sigma_high > 0 else m) * a
+        m_low = lowpass(m, sigma) * a
+        acc_h += m_high[..., None] * high; acc_l += m_low[..., None] * low
+        norm_h += m_high; norm_l += m_low
+    return acc_h / np.maximum(norm_h, 1e-8)[..., None] + acc_l / np.maximum(norm_l, 1e-8)[..., None]
 
 
 def load_scaled(path, scale):
@@ -91,7 +93,7 @@ def load_scaled(path, scale):
     return np.asarray(pil.resize((round(im.shape[1] * scale), round(im.shape[0] * scale)), Image.LANCZOS)) / 255.0
 
 
-def build_mosaic(names, corr_dir, data_dir, scale=0.5, ref=None, sigma=None, limit=3.0, warp=warpImageBilinear):
+def build_mosaic(names, corr_dir, data_dir, scale=0.5, ref=None, sigma=None, sigma_high=0, limit=3.0, warp=warpImageBilinear):
     names = list(names)
     ref = len(names) // 2 if ref is None else ref
     pair_Hs = []
@@ -103,7 +105,7 @@ def build_mosaic(names, corr_dir, data_dir, scale=0.5, ref=None, sigma=None, lim
     bbox = mosaic_canvas(images, Hs, limit)
     ims, alphas, weights = warp_all(images, Hs, bbox, warp)
     sigma = sigma or 0.03 * images[ref].shape[1]
-    blend = blend_two_band(ims, alphas, weights, sigma)
+    blend = blend_two_band(ims, alphas, weights, sigma, sigma_high)
     average = blend_average(ims, weights)
     return dict(blend=np.clip(blend, 0, 1), average=np.clip(average, 0, 1), ims=ims, alphas=alphas,
                 weights=weights, Hs=Hs, images=images, sigma=sigma, bbox=bbox)

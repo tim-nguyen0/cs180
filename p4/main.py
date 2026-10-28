@@ -37,13 +37,15 @@ def run_corr():
     for f in sorted(CORR.glob("*_*.npz")):
         if f.stem.startswith("rect_"):
             continue
-        a, b = f.stem.rsplit("_", 1) if not f.stem.startswith("2-") else f.stem.split("_")
+        a, b = f.stem.split("_")
         d = np.load(f); p1, p2 = d["im1_pts"], d["im2_pts"]
         H = computeH(p1, p2); A, bvec = build_system(p1, p2)
         q = np.hstack([p1, np.ones((len(p1), 1))]) @ H.T; q = q[:, :2] / q[:, 2:]
         err = np.linalg.norm(q - p2, axis=1)
-        im1, im2 = mosaic.load_scaled(DATA / (a + ".JPG"), 0.25), mosaic.load_scaled(DATA / (b + ".JPG"), 0.25)
-        fig = show_correspondences(im1, im2, p1 / 4, p2 / 4, save=out / f"corr_{f.stem}.png"); plt.close(fig)
+        pa, pb = next(DATA.glob(a + ".*")), next(DATA.glob(b + ".*"))
+        s = 0.25 if mosaic.load_image(pa).shape[1] > 2000 else 1.0
+        im1, im2 = mosaic.load_scaled(pa, s), mosaic.load_scaled(pb, s)
+        fig = show_correspondences(im1, im2, p1 * s, p2 * s, save=out / f"corr_{f.stem}.png"); plt.close(fig)
         with np.printoptions(precision=2, suppress=True, linewidth=250):
             txt = [f"pair {a} -> {b}: {len(p1)} correspondences", "",
                    "im1_pts (x, y)            im2_pts (x', y')", str(np.hstack([p1, p2])), "",
@@ -142,10 +144,10 @@ def run_rectify(names, scale=0.5):
 
 
 # ---------------------------------------------------------------- A.4
-def run_mosaic(names, tag, scale=0.5, limit=3.0, sigma=None):
+def run_mosaic(names, tag, scale=0.5, limit=3.0, sigma=None, sigma_high=0):
     out = OUT / "a4" / tag; out.mkdir(parents=True, exist_ok=True)
     t = time.perf_counter()
-    r = mosaic.build_mosaic(names, CORR, DATA, scale=scale, limit=limit, sigma=sigma)
+    r = mosaic.build_mosaic(names, CORR, DATA, scale=scale, limit=limit, sigma=sigma, sigma_high=sigma_high)
     print(f"{tag}: canvas {r['blend'].shape[1]}x{r['blend'].shape[0]} at scale {scale}, "
           f"sigma {r['sigma']:.1f}, {time.perf_counter() - t:.1f}s")
     save(r["blend"], out / "mosaic_two_band.jpg")
@@ -175,7 +177,7 @@ def main():
     p = sub.add_parser("mosaic")
     p.add_argument("--set", type=int, choices=SETS); p.add_argument("--names", nargs="+"); p.add_argument("--tag")
     p.add_argument("--scale", type=float, default=0.5); p.add_argument("--limit", type=float, default=3.0)
-    p.add_argument("--sigma", type=float)
+    p.add_argument("--sigma", type=float); p.add_argument("--sigma-high", type=float, default=0)
     a = ap.parse_args()
     if a.cmd == "corr":
         run_corr()
@@ -183,7 +185,7 @@ def main():
         run_rectify(a.images, a.scale)
     else:
         names = SETS[a.set] if a.set else a.names
-        run_mosaic(names, a.tag or (f"set{a.set}" if a.set else "custom"), a.scale, a.limit, a.sigma)
+        run_mosaic(names, a.tag or (f"set{a.set}" if a.set else "custom"), a.scale, a.limit, a.sigma, a.sigma_high)
 
 
 if __name__ == "__main__":
