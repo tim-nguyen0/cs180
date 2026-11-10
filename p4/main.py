@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 from homography import (computeH, build_system, show_correspondences, warpImageNearestNeighbor,
                         warpImageBilinear, _output_bbox)
 import mosaic
-from automatic_features import get_harris_corners, anms, get_descriptors, lowes_threshold
+from automatic_features import get_harris_corners, anms, get_descriptors, lowes_threshold, ransac
 
 ROOT = Path(__file__).resolve().parent
 DATA, CORR, OUT = ROOT / "data", ROOT / "corr", ROOT / "out"
@@ -228,6 +228,24 @@ def run_descriptors(names, scale=0.5, n_ip=500, c=0.9, pre=5000, show=8, sigma=2
               f"mean |{np.abs(descs.mean(1)).max():.1e}|, std {descs.std(1).min():.3f}-{descs.std(1).max():.3f}")
 
 
+def draw_matches(im1, im2, pts1, pts2, corners1, corners2, title, path, inliers=None):
+    H = max(im1.shape[0], im2.shape[0]); W1 = im1.shape[1]
+    canvas = np.ones((H, W1 + im2.shape[1], 3))
+    canvas[:im1.shape[0], :W1] = im1; canvas[:im2.shape[0], W1:] = im2
+    fig, ax = plt.subplots(figsize=(16, 8))
+    ax.imshow(canvas)
+    ax.scatter(corners1[1], corners1[0], s=4, c="yellow", alpha=0.4)
+    ax.scatter(corners2[1] + W1, corners2[0], s=4, c="yellow", alpha=0.4)
+    ok = np.ones(len(pts1), bool) if inliers is None else inliers
+    for (x1, y1), (x2, y2), good in zip(pts1, pts2, ok):
+        ax.plot([x1, x2 + W1], [y1, y2], "-", c="lime" if good else "red", lw=0.6 if good else 1.0, alpha=0.8)
+    for p, dx in ((pts1, 0), (pts2, W1)):
+        ax.scatter(p[ok, 0] + dx, p[ok, 1], s=10, c="lime", edgecolors="black", linewidths=0.3)
+        ax.scatter(p[~ok, 0] + dx, p[~ok, 1], s=14, c="red", marker="x")
+    ax.set_axis_off(); ax.set_title(title)
+    fig.savefig(path, dpi=120, bbox_inches="tight"); plt.close(fig)
+
+
 def run_lowes_threshold(names, scale=0.5, n_ip=500, c=0.9, pre=5000, sigma=2.0, threshold=0.3):
     out = OUT / "b3"; out.mkdir(parents=True, exist_ok=True)
     ims = [mosaic.load_scaled(DATA / n, scale) for n in names]
@@ -238,18 +256,37 @@ def run_lowes_threshold(names, scale=0.5, n_ip=500, c=0.9, pre=5000, sigma=2.0, 
         pts1 = pa[::-1, m[:, 0]].T; pts2 = pb[::-1, m[:, 1]].T
         np.savez(out / f"{tag}_matches.npz", im1_pts=pts1, im2_pts=pts2, matches=m)
         im1, im2 = ims[names.index(na)], ims[names.index(nb)]
-        H = max(im1.shape[0], im2.shape[0]); W1 = im1.shape[1]
-        canvas = np.ones((H, W1 + im2.shape[1], 3))
-        canvas[:im1.shape[0], :W1] = im1; canvas[:im2.shape[0], W1:] = im2
-        fig, ax = plt.subplots(figsize=(16, 8))
-        ax.imshow(canvas)
-        ax.scatter(pa[1], pa[0], s=4, c="yellow", alpha=0.4); ax.scatter(pb[1] + W1, pb[0], s=4, c="yellow", alpha=0.4)
-        for (x1, y1), (x2, y2) in zip(pts1, pts2):
-            ax.plot([x1, x2 + W1], [y1, y2], "-", c="lime", lw=0.6, alpha=0.8)
-        ax.scatter(pts1[:, 0], pts1[:, 1], s=10, c="red"); ax.scatter(pts2[:, 0] + W1, pts2[:, 1], s=10, c="red")
-        ax.set_axis_off(); ax.set_title(f"{tag}: {len(m)} matches (ratio < {threshold})")
-        fig.savefig(out / f"{tag}_matches.png", dpi=120, bbox_inches="tight"); plt.close(fig)
+        draw_matches(im1, im2, pts1, pts2, pa, pb, f"{tag}: {len(m)} matches (ratio < {threshold})",
+                     out / f"{tag}_matches.png")
         print(f"{tag}: {len(m)} matches of {len(da)} x {len(db)} features at threshold {threshold}")
+
+
+def run_ransac_compute_hom(names, scale=0.5, n_ip=500, c=0.9, pre=5000, sigma=2.0, threshold=0.3,
+                           iters=500, r=3.0):
+    out = OUT / "b4"; out.mkdir(parents=True, exist_ok=True)
+    ims = [mosaic.load_scaled(DATA / n, scale) for n in names]
+    feats = [extract_features(im.mean(-1), n_ip, c, pre, sigma) for im in ims]
+    for k, (na, nb) in enumerate(zip(names, names[1:])):
+        tag = f"{Path(na).stem}_{Path(nb).stem}"
+        (pa, da), (pb, db) = feats[k], feats[k + 1]
+        m = lowes_threshold(da, db, threshold)
+        pts1, pts2 = pa[::-1].T.astype(float), pb[::-1].T.astype(float)
+        H, inliers = ransac(pts1, pts2, m, iters, r)
+        mp1, mp2 = pts1[m[:, 0]], pts2[m[:, 1]]
+        np.savez(out / f"{tag}_ransac.npz", H=H, im1_pts=mp1[inliers], im2_pts=mp2[inliers])
+        np.savetxt(out / f"{tag}_H.txt", H, fmt="%12.6f")
+        draw_matches(ims[k], ims[k + 1], mp1, mp2, pa, pb,
+                     f"{tag}: {inliers.sum()} inliers / {len(m)} matches ({iters} iters, r = {r} px)",
+                     out / f"{tag}_ransac.png", inliers)
+        line = f"{tag}: {inliers.sum()}/{len(m)} inliers"
+        manual = CORR / f"{tag}.npz"
+        if manual.exists():
+            d = np.load(manual)
+            q1, q2 = d["im1_pts"] * scale, d["im2_pts"] * scale
+            proj = (H @ np.column_stack((q1, np.ones(len(q1)))).T).T
+            err = np.linalg.norm(proj[:, :2] / proj[:, 2:] - q2, axis=1)
+            line += f", manual clicks reproject with mean {err.mean():.2f} px (max {err.max():.2f})"
+        print(line)
 
 
 def main():
@@ -272,6 +309,11 @@ def main():
     p.add_argument("--n", type=int, default=500); p.add_argument("--c", type=float, default=0.9)
     p.add_argument("--pre", type=int, default=5000); p.add_argument("--sigma", type=float, default=2.0)
     p.add_argument("--threshold", type=float, default=0.3)
+    p = sub.add_parser("ransac"); p.add_argument("images", nargs="+"); p.add_argument("--scale", type=float, default=0.5)
+    p.add_argument("--n", type=int, default=500); p.add_argument("--c", type=float, default=0.9)
+    p.add_argument("--pre", type=int, default=5000); p.add_argument("--sigma", type=float, default=2.0)
+    p.add_argument("--threshold", type=float, default=0.3); p.add_argument("--iters", type=int, default=500)
+    p.add_argument("--r", type=float, default=3.0, help="inlier reprojection radius in pixels")
     a = ap.parse_args()
     if a.cmd == "corr":
         run_corr()
@@ -283,6 +325,8 @@ def main():
         run_descriptors(a.images, a.scale, a.n, a.c, a.pre, a.show, a.sigma)
     elif a.cmd == "match":
         run_lowes_threshold(a.images, a.scale, a.n, a.c, a.pre, a.sigma, a.threshold)
+    elif a.cmd == "ransac":
+        run_ransac_compute_hom(a.images, a.scale, a.n, a.c, a.pre, a.sigma, a.threshold, a.iters, a.r)
     else:
         names = SETS[a.set] if a.set else a.names
         run_mosaic(names, a.tag or (f"set{a.set}" if a.set else "custom"), a.scale, a.limit, a.sigma, a.sigma_high)

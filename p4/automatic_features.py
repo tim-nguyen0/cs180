@@ -6,6 +6,7 @@ from skimage.feature import corner_harris, peak_local_max
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent / "p2"))
 from filters import gaussian_blur
+import homography as hom
 
 
 
@@ -116,6 +117,46 @@ def lowes_threshold(descs1, descs2, threshold=0.3):
     i_1 = np.where(keep)[0]
     i_2 = nn1_i[keep]
     return np.column_stack((i_1, i_2))
+
+def ransac(pts1, pts2, corr, n=500, r=5.0):
+    num_corrs = corr.shape[0]
+    rng = np.random.default_rng()
+
+    all_pts1 = pts1[corr[:, 0]]  
+    all_pts2 = pts2[corr[:, 1]]  
+
+    pts1_hom = np.column_stack((all_pts1, np.ones(num_corrs)))
+
+    max_inliers = 0
+    best_inliers = None
+    best_H = None
+    for i in range(n):
+        idx = rng.choice(num_corrs, size=4, replace=False)
+        im1_pts = pts1[corr[idx, 0]]
+        im2_pts = pts2[corr[idx, 1]]
+        H = hom.computeH(im1_pts, im2_pts)
+
+        proj_hom = (H @ pts1_hom.T).T
+        proj_pts = proj_hom[:, :2] / proj_hom[:, 2:3]
+
+        sq_dists = np.diag(dist2(proj_pts, all_pts2))
+        inliers = sq_dists < (r ** 2)
+        num_inliers = np.sum(inliers)
+
+        if num_inliers > max_inliers:
+            max_inliers = num_inliers
+            best_inliers = inliers
+            best_H = H
+
+    # Run least squares on inliers for more robustness like mentioned in lecture
+    if best_inliers is not None and max_inliers >= 4:
+        best_H = hom.computeH(all_pts1[best_inliers], all_pts2[best_inliers])
+
+    return best_H, best_inliers
+
+
+
+    
 
 
 
