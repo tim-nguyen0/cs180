@@ -21,6 +21,10 @@
             <a href="#a2">A.2 Homographies</a>
             <a href="#a3">A.3 Warping</a>
             <a href="#a4">A.4 Mosaics</a>
+            <a href="#b1">B.1 Corners</a>
+            <a href="#b2">B.2 Descriptors</a>
+            <a href="#b3">B.3 Matching</a>
+            <a href="#b4">B.4 RANSAC &amp; Mosaics</a>
             <a href="../index.html">&larr; Portfolio</a>
         </nav>
         <main class="content">
@@ -207,6 +211,86 @@
                 out-of-focus background is far behind the branch and doesn't follow the branch's homography, so at a hard cut the bokeh
                 simply doesn't line up. Crossfading the high band over 30 px hides that discontinuity, and the petals, which are
                 registered correctly, stay sharp.</p>
+            </section>
+
+            <section id="b1">
+                <h2>B.1 Detecting Corner Features</h2>
+                <p>For our automatic feature detection, we follows a version simplified of the MOPs paper by Brown et. al. choosing Harris corners as our base features, which gives us localization in two directions by detecting intensity extrema where thresholded by how close they are to being umbillic points.</p>
+                <p>For a more uniform distribution of features, we use the adaptive non-maximal suppresion algorithm proposed in Brown et. al. below. This algorithm gives corners which have stronger responses in their locality a larger radii of influence.</p>
+                \[ r_i = \min_j \, \lVert \mathbf{x}_i - \mathbf{x}_j \rVert \quad \text{s.t.} \quad f(\mathbf{x}_i) < c \, f(\mathbf{x}_j) \]
+                <p>We only choose the strongest 5000 points for ANMS due to compute constraints and because 5000 inputs generally provides enough coverage to get sufficiently many descriptors.</p>
+                <table class="timings">
+                    <tr><th>Image (half resolution)</th><th>Harris corners</th><th>Into ANMS</th><th>After ANMS</th></tr>
+                    <tr><td>Courtyard, image 2</td><td>50789</td><td>5000</td><td>500</td></tr>
+                    <tr><td>Room, image 3</td><td>53481</td><td>5000</td><td>500</td></tr>
+                    <tr><td>Blossom, image 2</td><td>5674</td><td>5000</td><td>500</td></tr>
+                </table>
+                <figure class="wide"><a href="resources/b1/2_corners.jpg"><img src="resources/b1/2_corners.jpg" alt="Harris response, all corners, and ANMS corners on courtyard image 2." loading="lazy"></a><figcaption>Courtyard image 2: Harris response, all corners, 500 ANMS corners.</figcaption></figure>
+                <figure class="wide"><a href="resources/b1/2-3_corners.jpg"><img src="resources/b1/2-3_corners.jpg" alt="Harris response, all corners, and ANMS corners on room image 3." loading="lazy"></a><figcaption>Room image 3.</figcaption></figure>
+                <figure class="wide"><a href="resources/b1/flower-2_corners.jpg"><img src="resources/b1/flower-2_corners.jpg" alt="Harris response, all corners, and ANMS corners on blossom image 2." loading="lazy"></a><figcaption>Blossom image 2.</figcaption></figure>
+                <p>Demonstrated on images from the mosaics in Part A, we can see how harris corners with ANMS create even coverage of possible points for which we can extract features. The room image also shows that accidental correspondences won't be detected due to the thresholding (taking only top 5000 features) of the initial harris response.</p>
+            </section>
+
+            <section id="b2">
+                <h2>B.2 Extracting Feature Descriptors</h2>
+                <p>To extract features, we apply a low pass filter and sample 8x8 windows surrounding the ANMS filtered harris responses, then apply bias and variance noramlization. This implementation does not have rotation invariance.</p>
+                \[ d = \frac{p - \mu_p}{\sigma_p}, \qquad p \in \mathbb{R}^{8 \times 8} \]
+                <figure class="wide"><a href="resources/b2/2_descriptors.jpg"><img src="resources/b2/2_descriptors.jpg" alt="Eight corners from courtyard image 2 with their 40x40 windows and 8x8 descriptors." loading="lazy"></a><figcaption>Courtyard image 2: corner, raw \(40 \times 40\) window, normalized \(8 \times 8\) descriptor.</figcaption></figure>
+                <figure class="wide"><a href="resources/b2/flower-2_descriptors.jpg"><img src="resources/b2/flower-2_descriptors.jpg" alt="Eight corners from blossom image 2 with their 40x40 windows and 8x8 descriptors." loading="lazy"></a><figcaption>Blossom image 2.</figcaption></figure>
+                <p>Shown are some descriptors extracted from the correspondingly labeled responses, and we see that corners with more drastic intensity extrema create more distinct descriptors.</p>
+            </section>
+
+            <section id="b3">
+                <h2>B.3 Matching Feature Descriptors</h2>
+                <p>For feature matching we use nearest neighbors, but only for valid points determined via Lowe's thresholding. The threshold (0.3) selected below follows from a figure presented in Brown et. al.</p>
+                \[ \frac{\lVert d_i - d_{\mathrm{nn}_1} \rVert}{\lVert d_i - d_{\mathrm{nn}_2} \rVert} < 0.3 \]
+                <p>In general this yields pretty good results however looking closely one might find that certain homogenous repeated features (like windows) might have false correspondences.</p>
+                <figure class="wide"><a href="resources/b3/2_3_matches.jpg"><img src="resources/b3/2_3_matches.jpg" alt="Lowe ratio matches between courtyard images 2 and 3." loading="lazy"></a><figcaption>Courtyard images 2 &rarr; 3: 71 matches from 500 corners each. Yellow: all ANMS corners. Red: matched.</figcaption></figure>
+                <figure class="wide"><a href="resources/b3/flower-2_flower-3_matches.jpg"><img src="resources/b3/flower-2_flower-3_matches.jpg" alt="Lowe ratio matches between blossom images 2 and 3." loading="lazy"></a><figcaption>Blossom images 2 &rarr; 3: 19 matches.</figcaption></figure>
+                <figure class="wide"><a href="resources/b3/3_flower-2_matches.jpg"><img src="resources/b3/3_flower-2_matches.jpg" alt="Zero matches between an unrelated pair of images." loading="lazy"></a><figcaption>Sanity check: courtyard image 3 against blossom image 2 gives 0 matches.</figcaption></figure>
+                <p>We see that images which are unrelated generally give little to no matches. (Though note the difference in scale in these images)</p>
+            </section>
+
+            <section id="b4">
+                <h2>B.4 RANSAC for Robust Homography</h2>
+                <p>The previous notion of false correspondences motiavtes more robustness in matchin descriptors. In this implementation of automatic descriptor matching we use RANSAC to achieve that. By sampling random sets of 4 correspondences and computing homography operators, we can then assess how well said homography works by seeing how far the correspondences generated by nearest neighbors and Lowe's thresholding are from that of the homography operator applied to respective points. Here we do 500 randomized samples of 4 correspondences and choose the best Homography matrix from that simulation.</p>
+                \[ \lVert \pi(H \mathbf{p}_i) - \mathbf{p}'_i \rVert < r, \qquad r = 3 \text{ px} \]
+                <p>After computing homographies, we refit using inliers (those within an discretionary L2 error tolerance) to achieve further robustness.</p>
+                <table class="timings">
+                    <tr><th>Pair</th><th>Ratio matches</th><th>RANSAC inliers</th></tr>
+                    <tr><td>Courtyard 1 &rarr; 2</td><td>20</td><td>18</td></tr>
+                    <tr><td>Courtyard 2 &rarr; 3</td><td>71</td><td>60</td></tr>
+                    <tr><td>Courtyard 3 &rarr; 4</td><td>59</td><td>50</td></tr>
+                    <tr><td>Courtyard 4 &rarr; 5</td><td>54</td><td>49</td></tr>
+                    <tr><td>Courtyard 5 &rarr; 6</td><td>32</td><td>26</td></tr>
+                    <tr><td>Courtyard 6 &rarr; 7</td><td>191</td><td>179</td></tr>
+                    <tr><td>Room 1 &rarr; 2</td><td>45</td><td>39</td></tr>
+                    <tr><td>Room 2 &rarr; 3</td><td>33</td><td>29</td></tr>
+                    <tr><td>Room 3 &rarr; 4</td><td>24</td><td>19</td></tr>
+                    <tr><td>Room 4 &rarr; 5</td><td>29</td><td>22</td></tr>
+                    <tr><td>Blossom 1 &rarr; 2</td><td>24</td><td>23</td></tr>
+                    <tr><td>Blossom 2 &rarr; 3</td><td>19</td><td>19</td></tr>
+                    <tr><td>Blossom 3 &rarr; 4</td><td>16</td><td>16</td></tr>
+                </table>
+                <figure class="wide"><a href="resources/b4/2_3_ransac.jpg"><img src="resources/b4/2_3_ransac.jpg" alt="RANSAC inliers and outliers between courtyard images 2 and 3." loading="lazy"></a><figcaption>Courtyard images 2 &rarr; 3. Green: inliers. Red crosses: rejected matches, mostly one-window-over mistakes.</figcaption></figure>
+                <figure class="wide"><a href="resources/b4/2-2_2-3_ransac.jpg"><img src="resources/b4/2-2_2-3_ransac.jpg" alt="RANSAC inliers and outliers between room images 2 and 3." loading="lazy"></a><figcaption>Room images 2 &rarr; 3.</figcaption></figure>
+                <figure class="wide"><a href="resources/b4/flower-2_flower-3_ransac.jpg"><img src="resources/b4/flower-2_flower-3_ransac.jpg" alt="RANSAC inliers and outliers between blossom images 2 and 3." loading="lazy"></a><figcaption>Blossom images 2 &rarr; 3.</figcaption></figure>
+                <p>After RANSAC we see inliers and rejections as a result. Many of the errors are due to a small 3 pixel tolerance, but some are from repeating windows which was mentioned as a possible failure point for nearest neighbors with lowe's thresholding above.</p>
+
+                <h3>Automatic mosaics</h3>
+                <p>Now we compute automatic mosaics, same as in part A but with automatic feature detection and correspondence picking. The logic for blending follows exactly as in part A.</p>
+
+                <h3>Mosaic 1: courtyard</h3>
+                <figure class="wide"><a href="resources/b5/set1_manual_vs_auto.jpg"><img src="resources/b5/set1_manual_vs_auto.jpg" alt="Courtyard mosaic from hand-clicked correspondences above the automatic one." loading="lazy"></a><figcaption>Top: hand-clicked correspondences (Part A). Bottom: automatic.</figcaption></figure>
+                <p>As compared to te manual correspondence picking, the automatic yields smoother seams and overall better alignment. This is certainly due to more accuracy in point picking, as well as due to the fact that there are so many more correspondences which we fit to.</p>
+
+                <h3>Mosaic 2: room</h3>
+                <figure class="wide"><a href="resources/b5/set2_manual_vs_auto.jpg"><img src="resources/b5/set2_manual_vs_auto.jpg" alt="Room mosaic from hand-clicked correspondences above the automatic one." loading="lazy"></a><figcaption>Top: hand-clicked. Bottom: automatic.</figcaption></figure>
+                <p>We see the same smoothing out of kinks in this image as well due to more precision in point picking. There is less warping near edges/closer points where small errors are exacerbated, and no sharp kinks moving from one capture to another</p>
+
+                <h3>Mosaic 3: blossom branch</h3>
+                <figure class="wide"><a href="resources/b5/flower_manual_vs_auto.jpg"><img src="resources/b5/flower_manual_vs_auto.jpg" alt="Blossom mosaic from hand-clicked correspondences above the automatic one." loading="lazy"></a><figcaption>Top: hand-clicked. Bottom: automatic, same \(\sigma = 120\) / crossfade 30 as Part A.</figcaption></figure>
+                <p>This is again from a sample set as mentioned in Part A, and there is some seam blending issues which we mitigate the same way as in Part A. Again, this photo in general seems to have more distinct descriptors, however there are some issues in the originally captured data.</p>
             </section>
         </main>
     </div>
