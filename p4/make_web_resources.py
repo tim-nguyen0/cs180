@@ -41,6 +41,23 @@ def main():
         save(d / "mosaic_overwrite.jpg", RES / "a4" / f"{s}_overwrite.jpg", 2000)
         save(d / "mosaic_feather_average.jpg", RES / "a4" / f"{s}_average.jpg", 2000)
         save(d / "mosaic_two_band.jpg", RES / "a4" / f"{s}_two_band.jpg", 2400)
+    for stem in ["2", "2-3", "flower-2"]:
+        save(OUT / "b1" / f"{stem}_corners.png", RES / "b1" / f"{stem}_corners.jpg", 1800)
+    for stem in ["2", "flower-2"]:
+        save(OUT / "b2" / f"{stem}_descriptors.png", RES / "b2" / f"{stem}_descriptors.jpg", 1800)
+    for f in sorted((OUT / "b3").glob("*_matches.png")):
+        save(f, RES / "b3" / f"{f.stem}.jpg", 1800)
+    for f in sorted((OUT / "b4").glob("*_ransac.png")):
+        save(f, RES / "b4" / f"{f.stem}.jpg", 1800)
+    for s in ["set1", "set2", "flower"]:
+        d = OUT / "b5" / s
+        if not d.exists():
+            continue
+        save(d / "mosaic_two_band.jpg", RES / "b5" / f"{s}_two_band.jpg", 2400)
+        save(d / "manual_vs_auto.png", RES / "b5" / f"{s}_manual_vs_auto.jpg", 2000)
+        save(d / "seams.png", RES / "b5" / f"{s}_seams.jpg", 1200)
+        for f in sorted(d.glob("*_matches.png")):
+            save(f, RES / "b5" / f"{s}_{f.stem}.jpg", 1600)
 
 
 if __name__ == "__main__":

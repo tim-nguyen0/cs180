@@ -155,10 +155,9 @@ def ransac(pts1, pts2, corr, n=500, r=5.0):
     return best_H, best_inliers
 
 
-
-    
-
-
-
-
+def extract_features(im_gs, n_ip=500, c=0.9, pre=5000, sigma=2.0):
+    h, coords = get_harris_corners(im_gs)
+    strongest = np.argsort(-h[coords[0], coords[1]])[:pre]
+    kept = anms(h, coords[:, strongest], n_ip, c)
+    return kept, get_descriptors(im_gs, kept, sigma)
 

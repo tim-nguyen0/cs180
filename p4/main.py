@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 from homography import (computeH, build_system, show_correspondences, warpImageNearestNeighbor,
                         warpImageBilinear, _output_bbox)
 import mosaic
-from automatic_features import get_harris_corners, anms, get_descriptors, lowes_threshold, ransac
+from automatic_features import get_harris_corners, anms, get_descriptors, lowes_threshold, ransac, extract_features
 
 ROOT = Path(__file__).resolve().parent
 DATA, CORR, OUT = ROOT / "data", ROOT / "corr", ROOT / "out"
@@ -145,12 +145,7 @@ def run_rectify(names, scale=0.5):
 
 
 # ---------------------------------------------------------------- A.4
-def run_mosaic(names, tag, scale=0.5, limit=3.0, sigma=None, sigma_high=0):
-    out = OUT / "a4" / tag; out.mkdir(parents=True, exist_ok=True)
-    t = time.perf_counter()
-    r = mosaic.build_mosaic(names, CORR, DATA, scale=scale, limit=limit, sigma=sigma, sigma_high=sigma_high)
-    print(f"{tag}: canvas {r['blend'].shape[1]}x{r['blend'].shape[0]} at scale {scale}, "
-          f"sigma {r['sigma']:.1f}, {time.perf_counter() - t:.1f}s")
+def save_mosaic(r, names, out, scale):
     save(r["blend"], out / "mosaic_two_band.jpg")
     save(r["average"], out / "mosaic_feather_average.jpg")
     grid(r["images"], [Path(n).stem for n in names], out / "sources.png", ncols=min(4, len(names)))
@@ -168,6 +163,15 @@ def run_mosaic(names, tag, scale=0.5, limit=3.0, sigma=None, sigma_high=0):
     with np.printoptions(precision=6, suppress=True):
         (out / "homographies.txt").write_text("\n\n".join(
             f"H {Path(n).stem} -> reference {Path(names[len(names)//2]).stem} (scale {scale}):\n{H}" for n, H in zip(names, r["Hs"])))
+
+
+def run_mosaic(names, tag, scale=0.5, limit=3.0, sigma=None, sigma_high=0):
+    out = OUT / "a4" / tag; out.mkdir(parents=True, exist_ok=True)
+    t = time.perf_counter()
+    r = mosaic.build_mosaic(names, CORR, DATA, scale=scale, limit=limit, sigma=sigma, sigma_high=sigma_high)
+    print(f"{tag}: canvas {r['blend'].shape[1]}x{r['blend'].shape[0]} at scale {scale}, "
+          f"sigma {r['sigma']:.1f}, {time.perf_counter() - t:.1f}s")
+    save_mosaic(r, names, out, scale)
 
 
 # ---------------------------------------------------------------- B.1
@@ -194,13 +198,6 @@ def run_corners(names, scale=0.5, n_ip=500, c=0.9, pre=5000):
 
 
 # ---------------------------------------------------------------- B.2
-def extract_features(gray, n_ip=500, c=0.9, pre=5000, sigma=2.0):
-    h, coords = get_harris_corners(gray)
-    strongest = np.argsort(-h[coords[0], coords[1]])[:pre]
-    kept = anms(h, coords[:, strongest], n_ip, c)
-    return kept, get_descriptors(gray, kept, sigma)
-
-
 def run_descriptors(names, scale=0.5, n_ip=500, c=0.9, pre=5000, show=8, sigma=2.0):
     out = OUT / "b2"; out.mkdir(parents=True, exist_ok=True)
     for name in names:
@@ -289,6 +286,26 @@ def run_ransac_compute_hom(names, scale=0.5, n_ip=500, c=0.9, pre=5000, sigma=2.
         print(line)
 
 
+def run_auto_mosaic(names, tag, scale=0.5, limit=3.0, sigma=None, sigma_high=0, n_ip=500, c=0.9, pre=5000,
+                    desc_sigma=2.0, threshold=0.3, iters=500, r=3.0):
+    out = OUT / "b5" / tag; out.mkdir(parents=True, exist_ok=True)
+    t = time.perf_counter()
+    res = mosaic.build_auto_mosaic(names, DATA, scale=scale, limit=limit, sigma=sigma, sigma_high=sigma_high,
+                                   n_ip=n_ip, c=c, pre=pre, desc_sigma=desc_sigma, threshold=threshold, iters=iters, r=r)
+    print(f"{tag}: canvas {res['blend'].shape[1]}x{res['blend'].shape[0]} at scale {scale}, "
+          f"sigma {res['sigma']:.1f}, {time.perf_counter() - t:.1f}s")
+    save_mosaic(res, names, out, scale)
+    for k, (na, nb) in enumerate(zip(names, names[1:])):
+        pr = res["pairs"][k]; pt = f"{Path(na).stem}_{Path(nb).stem}"
+        draw_matches(res["images"][k], res["images"][k + 1], pr["pts1"], pr["pts2"], res["feats"][k][0], res["feats"][k + 1][0],
+                     f"{pt}: {pr['inliers'].sum()} inliers / {len(pr['pts1'])} matches", out / f"{pt}_matches.png", pr["inliers"])
+        print(f"  {pt}: {pr['inliers'].sum()}/{len(pr['pts1'])} inliers")
+    manual = OUT / "a4" / tag / "mosaic_two_band.jpg"
+    if manual.exists():
+        grid([plt.imread(manual) / 255.0, res["blend"]], ["manual correspondences", "automatic (Harris + MOPS + RANSAC)"],
+             out / "manual_vs_auto.png", ncols=1, size=14)
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -314,6 +331,14 @@ def main():
     p.add_argument("--pre", type=int, default=5000); p.add_argument("--sigma", type=float, default=2.0)
     p.add_argument("--threshold", type=float, default=0.3); p.add_argument("--iters", type=int, default=500)
     p.add_argument("--r", type=float, default=3.0, help="inlier reprojection radius in pixels")
+    p = sub.add_parser("automosaic")
+    p.add_argument("--set", type=int, choices=SETS); p.add_argument("--names", nargs="+"); p.add_argument("--tag")
+    p.add_argument("--scale", type=float, default=0.5); p.add_argument("--limit", type=float, default=3.0)
+    p.add_argument("--sigma", type=float); p.add_argument("--sigma-high", type=float, default=0)
+    p.add_argument("--n", type=int, default=500); p.add_argument("--c", type=float, default=0.9)
+    p.add_argument("--pre", type=int, default=5000); p.add_argument("--desc-sigma", type=float, default=2.0)
+    p.add_argument("--threshold", type=float, default=0.3); p.add_argument("--iters", type=int, default=500)
+    p.add_argument("--r", type=float, default=3.0)
     a = ap.parse_args()
     if a.cmd == "corr":
         run_corr()
@@ -327,6 +352,10 @@ def main():
         run_lowes_threshold(a.images, a.scale, a.n, a.c, a.pre, a.sigma, a.threshold)
     elif a.cmd == "ransac":
         run_ransac_compute_hom(a.images, a.scale, a.n, a.c, a.pre, a.sigma, a.threshold, a.iters, a.r)
+    elif a.cmd == "automosaic":
+        names = SETS[a.set] if a.set else a.names
+        run_auto_mosaic(names, a.tag or (f"set{a.set}" if a.set else "custom"), a.scale, a.limit, a.sigma, a.sigma_high,
+                        a.n, a.c, a.pre, a.desc_sigma, a.threshold, a.iters, a.r)
     else:
         names = SETS[a.set] if a.set else a.names
         run_mosaic(names, a.tag or (f"set{a.set}" if a.set else "custom"), a.scale, a.limit, a.sigma, a.sigma_high)

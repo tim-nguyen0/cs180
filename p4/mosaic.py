@@ -11,6 +11,7 @@ from filters import gaussian_blur
 from utils import load_image
 
 from homography import computeH, warpImageBilinear, warpImageNearestNeighbor, _output_bbox
+from automatic_features import extract_features, lowes_threshold, ransac
 
 
 def scale_H(H, s):
@@ -109,3 +110,25 @@ def build_mosaic(names, corr_dir, data_dir, scale=0.5, ref=None, sigma=None, sig
     average = blend_average(ims, weights)
     return dict(blend=np.clip(blend, 0, 1), average=np.clip(average, 0, 1), ims=ims, alphas=alphas,
                 weights=weights, Hs=Hs, images=images, sigma=sigma, bbox=bbox)
+
+
+def build_auto_mosaic(names, data_dir, scale=0.5, ref=None, sigma=None, sigma_high=0, limit=3.0, warp=warpImageBilinear,
+                      n_ip=500, c=0.9, pre=5000, desc_sigma=2.0, threshold=0.3, iters=500, r=3.0):
+    names = list(names)
+    ref = len(names) // 2 if ref is None else ref
+    images = [load_scaled(Path(data_dir) / n, scale) for n in names]
+    feats = [extract_features(im.mean(-1), n_ip, c, pre, desc_sigma) for im in images]
+    pair_Hs, pairs = [], []
+    for (c1, d1), (c2, d2) in zip(feats, feats[1:]):
+        m = lowes_threshold(d1, d2, threshold)
+        pts1, pts2 = c1[::-1].T.astype(float), c2[::-1].T.astype(float)
+        H, inliers = ransac(pts1, pts2, m, iters, r)
+        pair_Hs.append(H); pairs.append(dict(pts1=pts1[m[:, 0]], pts2=pts2[m[:, 1]], inliers=inliers))
+    Hs = chain_homographies(pair_Hs, ref)
+    bbox = mosaic_canvas(images, Hs, limit)
+    ims, alphas, weights = warp_all(images, Hs, bbox, warp)
+    sigma = sigma or 0.03 * images[ref].shape[1]
+    blend = blend_two_band(ims, alphas, weights, sigma, sigma_high)
+    average = blend_average(ims, weights)
+    return dict(blend=np.clip(blend, 0, 1), average=np.clip(average, 0, 1), ims=ims, alphas=alphas,
+                weights=weights, Hs=Hs, images=images, sigma=sigma, bbox=bbox, feats=feats, pairs=pairs)
