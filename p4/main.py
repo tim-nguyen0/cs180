@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 from homography import (computeH, build_system, show_correspondences, warpImageNearestNeighbor,
                         warpImageBilinear, _output_bbox)
 import mosaic
-from automatic_features import get_harris_corners, anms, get_descriptors
+from automatic_features import get_harris_corners, anms, get_descriptors, lowes_threshold
 
 ROOT = Path(__file__).resolve().parent
 DATA, CORR, OUT = ROOT / "data", ROOT / "corr", ROOT / "out"
@@ -194,16 +194,20 @@ def run_corners(names, scale=0.5, n_ip=500, c=0.9, pre=5000):
 
 
 # ---------------------------------------------------------------- B.2
+def extract_features(gray, n_ip=500, c=0.9, pre=5000, sigma=2.0):
+    h, coords = get_harris_corners(gray)
+    strongest = np.argsort(-h[coords[0], coords[1]])[:pre]
+    kept = anms(h, coords[:, strongest], n_ip, c)
+    return kept, get_descriptors(gray, kept, sigma)
+
+
 def run_descriptors(names, scale=0.5, n_ip=500, c=0.9, pre=5000, show=8, sigma=2.0):
     out = OUT / "b2"; out.mkdir(parents=True, exist_ok=True)
     for name in names:
         stem = Path(name).stem
         im = mosaic.load_scaled(DATA / name, scale)
         gray = im.mean(-1)
-        h, coords = get_harris_corners(gray)
-        strongest = np.argsort(-h[coords[0], coords[1]])[:pre]
-        kept = anms(h, coords[:, strongest], n_ip, c)
-        descs = get_descriptors(gray, kept, sigma)
+        kept, descs = extract_features(gray, n_ip, c, pre, sigma)
         np.savez(out / f"{stem}_descriptors.npz", coords=kept, descriptors=descs)
         # show the first `show` corners: location, raw 40x40 window, normalized 8x8 descriptor
         idx = np.linspace(0, kept.shape[1] - 1, show).astype(int)
@@ -224,6 +228,30 @@ def run_descriptors(names, scale=0.5, n_ip=500, c=0.9, pre=5000, show=8, sigma=2
               f"mean |{np.abs(descs.mean(1)).max():.1e}|, std {descs.std(1).min():.3f}-{descs.std(1).max():.3f}")
 
 
+def run_lowes_threshold(names, scale=0.5, n_ip=500, c=0.9, pre=5000, sigma=2.0, threshold=0.3):
+    out = OUT / "b3"; out.mkdir(parents=True, exist_ok=True)
+    ims = [mosaic.load_scaled(DATA / n, scale) for n in names]
+    feats = [extract_features(im.mean(-1), n_ip, c, pre, sigma) for im in ims]
+    for (na, (pa, da)), (nb, (pb, db)) in zip(zip(names, feats), zip(names[1:], feats[1:])):
+        tag = f"{Path(na).stem}_{Path(nb).stem}"
+        m = lowes_threshold(da, db, threshold)
+        pts1 = pa[::-1, m[:, 0]].T; pts2 = pb[::-1, m[:, 1]].T
+        np.savez(out / f"{tag}_matches.npz", im1_pts=pts1, im2_pts=pts2, matches=m)
+        im1, im2 = ims[names.index(na)], ims[names.index(nb)]
+        H = max(im1.shape[0], im2.shape[0]); W1 = im1.shape[1]
+        canvas = np.ones((H, W1 + im2.shape[1], 3))
+        canvas[:im1.shape[0], :W1] = im1; canvas[:im2.shape[0], W1:] = im2
+        fig, ax = plt.subplots(figsize=(16, 8))
+        ax.imshow(canvas)
+        ax.scatter(pa[1], pa[0], s=4, c="yellow", alpha=0.4); ax.scatter(pb[1] + W1, pb[0], s=4, c="yellow", alpha=0.4)
+        for (x1, y1), (x2, y2) in zip(pts1, pts2):
+            ax.plot([x1, x2 + W1], [y1, y2], "-", c="lime", lw=0.6, alpha=0.8)
+        ax.scatter(pts1[:, 0], pts1[:, 1], s=10, c="red"); ax.scatter(pts2[:, 0] + W1, pts2[:, 1], s=10, c="red")
+        ax.set_axis_off(); ax.set_title(f"{tag}: {len(m)} matches (ratio < {threshold})")
+        fig.savefig(out / f"{tag}_matches.png", dpi=120, bbox_inches="tight"); plt.close(fig)
+        print(f"{tag}: {len(m)} matches of {len(da)} x {len(db)} features at threshold {threshold}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -240,6 +268,10 @@ def main():
     p.add_argument("--n", type=int, default=500); p.add_argument("--c", type=float, default=0.9)
     p.add_argument("--pre", type=int, default=5000); p.add_argument("--show", type=int, default=8)
     p.add_argument("--sigma", type=float, default=2.0)
+    p = sub.add_parser("match"); p.add_argument("images", nargs="+"); p.add_argument("--scale", type=float, default=0.5)
+    p.add_argument("--n", type=int, default=500); p.add_argument("--c", type=float, default=0.9)
+    p.add_argument("--pre", type=int, default=5000); p.add_argument("--sigma", type=float, default=2.0)
+    p.add_argument("--threshold", type=float, default=0.3)
     a = ap.parse_args()
     if a.cmd == "corr":
         run_corr()
@@ -249,6 +281,8 @@ def main():
         run_corners(a.images, a.scale, a.n, a.c, a.pre)
     elif a.cmd == "descriptors":
         run_descriptors(a.images, a.scale, a.n, a.c, a.pre, a.show, a.sigma)
+    elif a.cmd == "match":
+        run_lowes_threshold(a.images, a.scale, a.n, a.c, a.pre, a.sigma, a.threshold)
     else:
         names = SETS[a.set] if a.set else a.names
         run_mosaic(names, a.tag or (f"set{a.set}" if a.set else "custom"), a.scale, a.limit, a.sigma, a.sigma_high)

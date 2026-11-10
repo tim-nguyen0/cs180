@@ -94,3 +94,30 @@ def get_descriptors(im_gs, pts, sigma=2.0):
         descs.append(patch.ravel())
     return np.array(descs)
 
+def lowes_threshold(descs1, descs2, threshold=0.3):
+    """
+    descs1, descs2 : N x 64 and M x 64 sized feature matrices
+    threshold: Lowe's ratio test threshold
+    """
+
+    sq_dists = np.sum(descs1**2, axis=1, keepdims=True) + np.sum(descs2**2, axis=1)[None, :] - 2 * descs1 @ descs2.T
+    dists = np.sqrt(np.maximum(sq_dists,0.0)) # for fp errors
+
+    sorted_i = np.argsort(dists,axis=1)
+    sorted_dists = np.sort(dists, axis=1)
+
+    nn1_i = sorted_i[:, 0]
+    nn1_dist = sorted_dists[:,0]
+    nn2_dist = sorted_dists[:, 1]
+
+    ratios = nn1_dist/np.maximum(nn2_dist, 1e-12)
+    keep = ratios < threshold
+
+    i_1 = np.where(keep)[0]
+    i_2 = nn1_i[keep]
+    return np.column_stack((i_1, i_2))
+
+
+
+
+
