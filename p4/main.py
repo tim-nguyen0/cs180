@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 from homography import (computeH, build_system, show_correspondences, warpImageNearestNeighbor,
                         warpImageBilinear, _output_bbox)
 import mosaic
+from automatic_features import get_harris_corners, anms, get_descriptors
 
 ROOT = Path(__file__).resolve().parent
 DATA, CORR, OUT = ROOT / "data", ROOT / "corr", ROOT / "out"
@@ -169,6 +170,60 @@ def run_mosaic(names, tag, scale=0.5, limit=3.0, sigma=None, sigma_high=0):
             f"H {Path(n).stem} -> reference {Path(names[len(names)//2]).stem} (scale {scale}):\n{H}" for n, H in zip(names, r["Hs"])))
 
 
+# ---------------------------------------------------------------- B.1
+def run_corners(names, scale=0.5, n_ip=500, c=0.9, pre=5000):
+    out = OUT / "b1"; out.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        stem = Path(name).stem
+        im = mosaic.load_scaled(DATA / name, scale)
+        gray = im.mean(-1)
+        t = time.perf_counter(); h, coords = get_harris_corners(gray); t_h = time.perf_counter() - t
+        strongest = np.argsort(-h[coords[0], coords[1]])[:pre]
+        t = time.perf_counter(); kept = anms(h, coords[:, strongest], n_ip, c); t_a = time.perf_counter() - t
+        fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+        axes[0].imshow(h, cmap="magma", vmin=0, vmax=np.percentile(h, 99.9)); axes[0].set_title("Harris response")
+        axes[1].imshow(im); axes[1].scatter(coords[1], coords[0], s=2, c="yellow", lw=0)
+        axes[1].set_title(f"all Harris corners ({coords.shape[1]})")
+        axes[2].imshow(im); axes[2].scatter(kept[1], kept[0], s=8, c="cyan", edgecolors="black", lw=0.3)
+        axes[2].set_title(f"ANMS, {kept.shape[1]} strongest (c = {c})")
+        for ax in axes:
+            ax.axis("off")
+        fig.tight_layout(); fig.savefig(out / f"{stem}_corners.png", dpi=120, bbox_inches="tight"); plt.close(fig)
+        np.savez(out / f"{stem}_corners.npz", harris=coords, anms=kept)
+        print(f"{name}: {coords.shape[1]} corners in {t_h:.2f}s, ANMS -> {kept.shape[1]} in {t_a:.2f}s")
+
+
+# ---------------------------------------------------------------- B.2
+def run_descriptors(names, scale=0.5, n_ip=500, c=0.9, pre=5000, show=8, sigma=2.0):
+    out = OUT / "b2"; out.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        stem = Path(name).stem
+        im = mosaic.load_scaled(DATA / name, scale)
+        gray = im.mean(-1)
+        h, coords = get_harris_corners(gray)
+        strongest = np.argsort(-h[coords[0], coords[1]])[:pre]
+        kept = anms(h, coords[:, strongest], n_ip, c)
+        descs = get_descriptors(gray, kept, sigma)
+        np.savez(out / f"{stem}_descriptors.npz", coords=kept, descriptors=descs)
+        # show the first `show` corners: location, raw 40x40 window, normalized 8x8 descriptor
+        idx = np.linspace(0, kept.shape[1] - 1, show).astype(int)
+        fig, axes = plt.subplots(3, show, figsize=(2.2 * show, 7))
+        for j, i in enumerate(idx):
+            y, x = kept[:, i]
+            axes[0, j].imshow(im); axes[0, j].set_xlim(x - 60, x + 60); axes[0, j].set_ylim(y + 60, y - 60)
+            axes[0, j].add_patch(plt.Rectangle((x - 20, y - 20), 40, 40, fill=False, ec="cyan", lw=1.5))
+            axes[1, j].imshow(gray[y - 20:y + 20, x - 20:x + 20], cmap="gray", vmin=0, vmax=1)
+            axes[2, j].imshow(descs[i].reshape(8, 8), cmap="gray", interpolation="nearest")
+            axes[0, j].set_title(f"({x}, {y})", fontsize=9)
+        for ax in axes.flat:
+            ax.set_xticks([]); ax.set_yticks([])
+        for ax, lab in zip(axes[:, 0], ["corner", "40x40 window", "8x8 descriptor"]):
+            ax.set_ylabel(lab)
+        fig.tight_layout(); fig.savefig(out / f"{stem}_descriptors.png", dpi=120, bbox_inches="tight"); plt.close(fig)
+        print(f"{name}: {descs.shape[0]} descriptors of length {descs.shape[1]}, "
+              f"mean |{np.abs(descs.mean(1)).max():.1e}|, std {descs.std(1).min():.3f}-{descs.std(1).max():.3f}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -178,11 +233,22 @@ def main():
     p.add_argument("--set", type=int, choices=SETS); p.add_argument("--names", nargs="+"); p.add_argument("--tag")
     p.add_argument("--scale", type=float, default=0.5); p.add_argument("--limit", type=float, default=3.0)
     p.add_argument("--sigma", type=float); p.add_argument("--sigma-high", type=float, default=0)
+    p = sub.add_parser("corners"); p.add_argument("images", nargs="+"); p.add_argument("--scale", type=float, default=0.5)
+    p.add_argument("--n", type=int, default=500); p.add_argument("--c", type=float, default=0.9)
+    p.add_argument("--pre", type=int, default=5000, help="strongest corners kept before ANMS")
+    p = sub.add_parser("descriptors"); p.add_argument("images", nargs="+"); p.add_argument("--scale", type=float, default=0.5)
+    p.add_argument("--n", type=int, default=500); p.add_argument("--c", type=float, default=0.9)
+    p.add_argument("--pre", type=int, default=5000); p.add_argument("--show", type=int, default=8)
+    p.add_argument("--sigma", type=float, default=2.0)
     a = ap.parse_args()
     if a.cmd == "corr":
         run_corr()
     elif a.cmd == "rectify":
         run_rectify(a.images, a.scale)
+    elif a.cmd == "corners":
+        run_corners(a.images, a.scale, a.n, a.c, a.pre)
+    elif a.cmd == "descriptors":
+        run_descriptors(a.images, a.scale, a.n, a.c, a.pre, a.show, a.sigma)
     else:
         names = SETS[a.set] if a.set else a.names
         run_mosaic(names, a.tag or (f"set{a.set}" if a.set else "custom"), a.scale, a.limit, a.sigma, a.sigma_high)

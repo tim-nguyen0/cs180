@@ -1,6 +1,7 @@
 import sys
 from pathlib import Path
 import numpy as np
+from PIL import Image
 from scipy.ndimage import distance_transform_edt, zoom
 
 ROOT = Path(__file__).resolve().parent
@@ -88,7 +89,6 @@ def load_scaled(path, scale):
     im = load_image(path)
     if scale == 1:
         return im
-    from PIL import Image
     pil = Image.fromarray((im * 255).astype(np.uint8))
     return np.asarray(pil.resize((round(im.shape[1] * scale), round(im.shape[0] * scale)), Image.LANCZOS)) / 255.0
 
